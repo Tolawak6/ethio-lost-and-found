@@ -1,0 +1,24 @@
+{
+  "name": "ethio-lost-and-found",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Ethio Lost & Found — a community lost and found board for Ethiopia",
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev": "concurrently -n api,web -c green,cyan \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "dev:api": "npm --prefix backend run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start",
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "test:api": "npm --prefix backend test",
+    "test:web": "npm --prefix frontend test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC"
+}

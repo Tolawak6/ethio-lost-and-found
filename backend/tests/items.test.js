@@ -23,16 +23,18 @@ const { createStore } = require('../store');
 const { Item, CATEGORIES, AGENCIES } = require('../models/Item');
 const { Claim } = require('../models/Claim');
 
-const STAFF_KEY = 'integration-staff-key';
+const STAFF_EMAIL = 'staff@depot.et';
+const STAFF_PASSWORD = 'integration-staff-password';
 
 let mongo;
+let staffToken = '';
 let server;
 let baseUrl;
 let skipReason = null;
 
 const request = async (method, urlPath, { body, staff = false } = {}) => {
   const init = { method, headers: {} };
-  if (staff) init.headers['x-staff-key'] = STAFF_KEY;
+  if (staff && staffToken) init.headers.authorization = `Bearer ${staffToken}`;
   if (body instanceof FormData) {
     init.body = body;
   } else if (body !== undefined) {
@@ -91,12 +93,26 @@ before(async () => {
     return;
   }
 
-  config.staffApiKey = STAFF_KEY;
-  const app = createApp(createStore({ seed: false }), { serveFrontend: false });
+  config.sessionSecret = 'integration-session-secret';
+  const store = createStore({ seed: false });
+  const { hashPassword } = require('../auth/passwords');
+  await store.staffAccounts.create({
+    email: STAFF_EMAIL,
+    name: 'Integration Staff',
+    passwordHash: await hashPassword(STAFF_PASSWORD),
+    role: 'manager',
+  });
+
+  const app = createApp(store, { serveFrontend: false });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const login = await request('POST', '/api/auth/login', {
+    body: { email: STAFF_EMAIL, password: STAFF_PASSWORD },
+  });
+  staffToken = login.body.token;
 });
 
 after(async () => {
@@ -222,7 +238,7 @@ it('returns workload stats', async () => {
 
 // --------------------------------------------------------------- department
 
-it('staff-only endpoints reject callers without the key', async () => {
+it('staff-only endpoints reject callers without a session', async () => {
   assert.equal((await request('GET', '/api/staff/items')).status, 401);
   assert.equal((await request('POST', '/api/items', { body: validItem() })).status, 401);
 });

@@ -1,39 +1,35 @@
-const crypto = require('crypto');
-const config = require('../config');
-
-const safeEqual = (a, b) => {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-};
+const { verifyToken } = require('../auth/tokens');
 
 /**
- * Department-only routes. The client sends the staff key either as
- * `x-staff-key` or as `Authorization: Bearer <key>`.
+ * Department authentication.
  *
- * Without STAFF_API_KEY configured the API stays usable for local development
- * and demos, but logs a warning at boot (see config.js).
+ * Staff sign in at /admin with an email + password; the server returns a signed
+ * session token that the browser sends as `Authorization: Bearer <token>`.
+ * Permission to write is checked against the account, not a shared secret, so
+ * accounts can be deactivated individually.
  */
-const requireStaff = (req, res, next) => {
-  if (!config.staffApiKey) {
-    req.staff = { authenticated: false, demo: true };
-    return next();
+const createRequireStaff = ({ staffAccounts, secret }) => async (req, res, next) => {
+  // The browser sends the httpOnly cookie; API clients send a bearer token.
+  const header = req.get('authorization') || '';
+  const token = (header.replace(/^Bearer\s+/i, '').trim() || req.cookies?.staff_session || '').trim();
+
+  if (!token) {
+    return res.status(401).json({ error: 'Sign in to the department workspace' });
   }
 
-  const header = req.get('x-staff-key') || '';
-  const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  const provided = header || bearer;
-
-  if (!provided || !safeEqual(provided, config.staffApiKey)) {
-    return res.status(401).json({
-      error: 'Staff sign-in required',
-      hint: 'Send the department key in the x-staff-key header.',
-    });
+  const payload = verifyToken(token, secret);
+  if (!payload) {
+    return res.status(401).json({ error: 'Your session has expired — please sign in again' });
   }
 
-  req.staff = { authenticated: true };
+  const account = await staffAccounts.findById(payload.sub);
+  if (!account || !account.active) {
+    return res.status(401).json({ error: 'This account is no longer active' });
+  }
+
+  // eslint-disable-next-line no-param-reassign
+  req.staff = account;
   return next();
 };
 
-module.exports = { requireStaff };
+module.exports = { createRequireStaff };

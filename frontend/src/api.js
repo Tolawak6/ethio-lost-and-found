@@ -7,7 +7,7 @@
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-const STAFF_KEY_STORAGE = 'elf.staffKey';
+const STAFF_TOKEN_STORAGE = 'elf.staffToken';
 
 export class ApiError extends Error {
   constructor(message, status, fields) {
@@ -44,30 +44,33 @@ const buildQuery = (params = {}) => {
   return query ? `?${query}` : '';
 };
 
-/** The department key is kept in the browser only, never in the bundle. */
-export const staffKey = {
+/**
+ * Session token storage. The server also sets an httpOnly cookie, so the app
+ * works even when localStorage is unavailable; the token is kept so API calls
+ * can carry it explicitly as well.
+ */
+export const staffSession = {
   get: () => {
     try {
-      return window.localStorage.getItem(STAFF_KEY_STORAGE) || '';
+      return window.localStorage.getItem(STAFF_TOKEN_STORAGE) || '';
     } catch {
       return '';
     }
   },
   set: (value) => {
     try {
-      if (value) window.localStorage.setItem(STAFF_KEY_STORAGE, value);
-      else window.localStorage.removeItem(STAFF_KEY_STORAGE);
+      if (value) window.localStorage.setItem(STAFF_TOKEN_STORAGE, value);
+      else window.localStorage.removeItem(STAFF_TOKEN_STORAGE);
     } catch {
       /* storage may be blocked */
     }
   },
-  clear: () => staffKey.set(''),
+  clear: () => staffSession.set(''),
 };
 
-/** Sends the staff key only when one is stored. */
 const staffHeaders = (extra = {}) => {
-  const key = staffKey.get();
-  return key ? { ...extra, 'x-staff-key': key } : extra;
+  const token = staffSession.get();
+  return token ? { ...extra, authorization: `Bearer ${token}` } : extra;
 };
 
 export const api = {
@@ -124,9 +127,64 @@ export const api = {
       body: JSON.stringify({ status, reviewNote }),
     }).then(parse),
 
-  /** Verifies a stored staff key against a protected endpoint. */
-  checkStaffKey: async () => {
-    const res = await fetch('/api/staff/overview', { headers: staffHeaders() });
-    return res.ok;
+  // --- authentication -----------------------------------------------------
+  signIn: async (credentials) => {
+    const payload = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      credentials: 'same-origin',
+      body: JSON.stringify(credentials),
+    }).then(parse);
+    if (payload?.token) staffSession.set(payload.token);
+    return payload;
   },
+
+  signOut: async () => {
+    staffSession.clear();
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch {
+      /* signing out locally is enough */
+    }
+  },
+
+  /** Resolves the current account, or null when there is no session. */
+  getSession: async () => {
+    try {
+      const payload = await fetch('/api/auth/me', {
+        headers: staffHeaders(),
+        credentials: 'same-origin',
+      }).then(parse);
+      return payload?.account || null;
+    } catch (err) {
+      if (err.status === 401) {
+        staffSession.clear();
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  changePassword: (currentPassword, newPassword) =>
+    fetch('/api/auth/password', {
+      method: 'POST',
+      headers: staffHeaders(JSON_HEADERS),
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }).then(parse),
+
+  staffAccounts: () => fetch('/api/staff/accounts', { headers: staffHeaders() }).then(parse),
+
+  createStaffAccount: (account) =>
+    fetch('/api/staff/accounts', {
+      method: 'POST',
+      headers: staffHeaders(JSON_HEADERS),
+      body: JSON.stringify(account),
+    }).then(parse),
+
+  setStaffActive: (id, active) =>
+    fetch(`/api/staff/accounts/${id}`, {
+      method: 'PATCH',
+      headers: staffHeaders(JSON_HEADERS),
+      body: JSON.stringify({ active }),
+    }).then(parse),
 };

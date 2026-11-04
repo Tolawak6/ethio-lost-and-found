@@ -7,6 +7,8 @@ const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const { createItemsRouter } = require('./routes/items');
 const { createStaffRouter } = require('./routes/staff');
+const { createAuthRouter } = require('./routes/auth');
+const { createRequireStaff } = require('./middleware/auth');
 const { asyncHandler, notFound, errorHandler } = require('./middleware');
 
 /**
@@ -20,7 +22,23 @@ const createApp = (store, { serveFrontend } = {}) => {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
 
-  app.use(cors({ origin: config.corsOrigin }));
+  app.use(cors({ origin: config.corsOrigin, credentials: true }));
+
+  // Minimal cookie parser: the only cookie is the staff session.
+  app.use((req, res, next) => {
+    req.cookies = {};
+    const header = req.get('cookie');
+    if (header) {
+      header.split(';').forEach((pair) => {
+        const index = pair.indexOf('=');
+        if (index === -1) return;
+        const key = pair.slice(0, index).trim();
+        const value = pair.slice(index + 1).trim();
+        if (key) req.cookies[key] = decodeURIComponent(value);
+      });
+    }
+    next();
+  });
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -29,6 +47,10 @@ const createApp = (store, { serveFrontend } = {}) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    // The department area is deliberately unlisted; keep it out of indexes.
+    if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    }
     next();
   });
 
@@ -101,7 +123,12 @@ const createApp = (store, { serveFrontend } = {}) => {
     });
   }));
 
-  const itemsRouter = createItemsRouter(store);
+  const staffAccounts = store.staffAccounts;
+  const secret = config.sessionSecret;
+  const requireStaff = createRequireStaff({ staffAccounts, secret });
+
+  const itemsRouter = createItemsRouter(store, { requireStaff });
+  app.use('/api/auth', createAuthRouter({ staffAccounts, requireStaff, secret }));
   app.use('/api/items', (req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       return writeLimiter(req, res, next);
@@ -109,7 +136,7 @@ const createApp = (store, { serveFrontend } = {}) => {
     return next();
   });
   app.use('/api/items', itemsRouter);
-  app.use('/api/staff', createStaffRouter(store));
+  app.use('/api/staff', createStaffRouter(store, { requireStaff }));
 
   // Locally stored images (used when Cloudinary is not configured).
   fs.mkdirSync(config.uploadDir, { recursive: true });

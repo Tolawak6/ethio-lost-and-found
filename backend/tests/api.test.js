@@ -17,21 +17,28 @@ const path = require('path');
 const config = require('../config');
 const { createApp } = require('../app');
 const { createMemoryStore } = require('../store/memoryStore');
+const { createMemoryStaffAccounts } = require('../store/staffAccounts');
+const { hashPassword } = require('../auth/passwords');
 const { CATEGORIES, AGENCIES } = require('../models/Item');
+
+const STAFF_EMAIL = 'staff@depot.et';
+const STAFF_PASSWORD = 'test-staff-password';
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
   'base64'
 );
 
-const STAFF_KEY = 'test-staff-key';
 let store;
+let staffAccounts;
+let staffToken = '';
 let server;
 let baseUrl;
 
 const request = async (method, urlPath, { body, staff = false, headers = {} } = {}) => {
   const init = { method, headers: { ...headers } };
-  if (staff) init.headers['x-staff-key'] = STAFF_KEY;
+  // `staff: true` signs the request as a real department account.
+  if (staff && staffToken) init.headers.authorization = `Bearer ${staffToken}`;
   if (body instanceof FormData) {
     init.body = body;
   } else if (body !== undefined) {
@@ -77,18 +84,32 @@ const validClaim = () => ({
 });
 
 before(async () => {
-  config.staffApiKey = STAFF_KEY;
+  config.sessionSecret = 'api-test-session-secret';
   store = createMemoryStore([]);
+  staffAccounts = createMemoryStaffAccounts();
+  store.staffAccounts = staffAccounts;
+  await staffAccounts.create({
+    email: STAFF_EMAIL,
+    name: 'Test Staff',
+    passwordHash: await hashPassword(STAFF_PASSWORD),
+    depot: 'Merkato',
+    role: 'manager',
+  });
+
   // Pin API-only mode so tests never depend on a local frontend build.
   const app = createApp(store, { serveFrontend: false });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const login = await request('POST', '/api/auth/login', {
+    body: { email: STAFF_EMAIL, password: STAFF_PASSWORD },
+  });
+  staffToken = login.body.token;
 });
 
 after(async () => {
-  config.staffApiKey = '';
   await new Promise((resolve) => server.close(resolve));
   fs.rmSync(process.env.UPLOAD_DIR, { recursive: true, force: true });
 });
@@ -112,13 +133,12 @@ test('GET /api/health reports readiness', async () => {
   assert.equal(res.body.database, 'connected');
 });
 
-test('GET /api/items/meta exposes bus options and staff flag', async () => {
+test('GET /api/items/meta exposes bus options', async () => {
   const res = await request('GET', '/api/items/meta');
   assert.equal(res.status, 200);
   assert.deepEqual([...res.body.categories].sort(), [...CATEGORIES].sort());
   assert.deepEqual(res.body.agencies, AGENCIES);
   assert.ok(res.body.statuses.includes('In Storage'));
-  assert.equal(res.body.staffRequired, true);
   assert.equal(res.body.retentionDays, 90);
 });
 
@@ -133,21 +153,21 @@ test('staff can publish an item', async () => {
   assert.ok(res.body.storageDeadline, 'a 90-day storage deadline is derived');
 });
 
-test('publishing requires the staff key', async () => {
-  const noKey = await request('POST', '/api/items', { body: validItem() });
-  assert.equal(noKey.status, 401);
+test('publishing requires a signed-in department account', async () => {
+  const anonymous = await request('POST', '/api/items', { body: validItem() });
+  assert.equal(anonymous.status, 401);
 
-  const wrongKey = await request('POST', '/api/items', {
+  const forged = await request('POST', '/api/items', {
     body: validItem(),
-    headers: { 'x-staff-key': 'nope' },
+    headers: { authorization: 'Bearer not-a-real-token' },
   });
-  assert.equal(wrongKey.status, 401);
+  assert.equal(forged.status, 401);
 });
 
-test('staff key also works as a bearer token', async () => {
+test('a session token authorises writes', async () => {
   const res = await request('POST', '/api/items', {
     body: validItem(),
-    headers: { authorization: `Bearer ${STAFF_KEY}` },
+    headers: { authorization: `Bearer ${staffToken}` },
   });
   assert.equal(res.status, 201);
 });
@@ -363,6 +383,7 @@ test('rejecting the only claim returns the item to storage', async () => {
 test('staff endpoints reject unauthenticated callers and bad input', async () => {
   assert.equal((await request('GET', '/api/staff/items')).status, 401);
   assert.equal((await request('GET', '/api/staff/overview')).status, 401);
+  assert.equal((await request('GET', '/api/staff/accounts')).status, 401);
 
   const item = await request('POST', '/api/items', { body: validItem(), staff: true });
   const claim = await request('POST', `/api/items/${item.body._id}/claims`, { body: validClaim() });
@@ -435,7 +456,7 @@ test('replacing an image removes the old file; deleting removes the new one', as
 test('malformed JSON and unknown routes return JSON errors', async () => {
   const badJson = await fetch(`${baseUrl}/api/items`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-staff-key': STAFF_KEY },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${staffToken}` },
     body: '{not json',
   });
   assert.equal(badJson.status, 400);

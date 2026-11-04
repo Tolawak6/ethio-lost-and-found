@@ -2,21 +2,29 @@ const mongoose = require('mongoose');
 const config = require('../config');
 const { createMongoStore } = require('./mongoStore');
 const { createMemoryStore } = require('./memoryStore');
+const { createMongoStaffAccounts, createMemoryStaffAccounts } = require('./staffAccounts');
 const { SEED_ITEMS } = require('../seed');
 
 /**
- * Picks a backend store.
- *   MONGO_URI set   -> MongoDB via Mongoose
- *   otherwise       -> in-memory (development/demo only)
+ * Picks a backend store and its matching staff-account store.
+ *   MONGO_URI set -> MongoDB via Mongoose
+ *   otherwise     -> in-memory (development/demo only)
  */
 const createStore = ({ seed = true } = {}) => {
   if (!config.mongoUri) {
-    console.warn(
-      '[db] MONGO_URI is not set — using an IN-MEMORY store. Data will be lost when the server stops.'
-    );
-    return createMemoryStore(seed ? SEED_ITEMS : []);
+    if (!config.isTest) {
+      console.warn(
+        '[db] MONGO_URI is not set — using an IN-MEMORY store. Data will be lost when the server stops.'
+      );
+    }
+    const store = createMemoryStore(seed ? SEED_ITEMS : []);
+    // Staff accounts live alongside the item store.
+    store.staffAccounts = createMemoryStaffAccounts();
+    return store;
   }
-  return createMongoStore();
+  const store = createMongoStore();
+  store.staffAccounts = createMongoStaffAccounts();
+  return store;
 };
 
 /** Connects Mongoose (Mongo store only). Returns true when ready. */

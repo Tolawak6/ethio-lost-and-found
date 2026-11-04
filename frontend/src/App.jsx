@@ -8,7 +8,6 @@ import Filters from './components/Filters';
 import StatsBar from './components/StatsBar';
 import EmptyState from './components/EmptyState';
 import TrackClaim from './components/TrackClaim';
-import StaffPanel from './components/StaffPanel';
 import { debounce } from './utils';
 
 const DEFAULT_FILTERS = {
@@ -39,7 +38,6 @@ export default function App() {
   const [claimIntent, setClaimIntent] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [trackingOpen, setTrackingOpen] = useState(false);
-  const [staffOpen, setStaffOpen] = useState(false);
   const requestId = useRef(0);
 
   const applySearch = useMemo(
@@ -132,9 +130,6 @@ export default function App() {
             <div className="hero__links">
               <button type="button" className="link-button link-button--light" onClick={() => setTrackingOpen(true)}>
                 Track a claim
-              </button>
-              <button type="button" className="link-button link-button--light" onClick={() => setStaffOpen(true)}>
-                Department sign-in
               </button>
             </div>
           </div>
@@ -298,14 +293,6 @@ export default function App() {
 
       {trackingOpen && <TrackClaim onClose={() => setTrackingOpen(false)} />}
 
-      {staffOpen && (
-        <StaffPanel
-          categories={meta.categories}
-          agencies={meta.agencies}
-          onClose={() => setStaffOpen(false)}
-          onChanged={refreshAll}
-        />
-      )}
     </div>
   );
 }

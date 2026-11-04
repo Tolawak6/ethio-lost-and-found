@@ -2,13 +2,12 @@ const express = require('express');
 const { CATEGORIES, STATUSES, AGENCIES } = require('../models/Item');
 const { upload, storeImage, destroyImage } = require('../upload');
 const { validateItem, validateClaim } = require('../middleware/validateItem');
-const { requireStaff } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware');
 const { buildFilter } = require('../store/filter');
 const config = require('../config');
 
 /** Mounts the item + claim routes on a given store implementation. */
-const createItemsRouter = (store) => {
+const createItemsRouter = (store, { requireStaff }) => {
   const router = express.Router();
 
   const requireReady = (req, res, next) => {
@@ -26,7 +25,7 @@ const createItemsRouter = (store) => {
       statuses: STATUSES,
       agencies: AGENCIES,
       retentionDays: config.retentionDays,
-      staffRequired: Boolean(config.staffApiKey),
+
     });
   });
 

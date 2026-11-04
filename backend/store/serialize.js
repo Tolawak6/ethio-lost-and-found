@@ -12,16 +12,6 @@ const serializeItem = (doc) => {
   return { _id: String(_id), ...rest };
 };
 
-/**
- * Item plus moderation detail for department screens.
- * Includes claim counts and the private identifying details.
- */
-const serializeStaffItem = (doc, extra = {}) => {
-  const plain = toPlain(doc);
-  const { __v, imagePublicId, _id, ...rest } = plain;
-  return { _id: String(_id), ...rest, ...extra };
-};
-
 /** Public claim: no internal notes, no staff-only fields. */
 const serializeClaim = (doc) => {
   const plain = toPlain(doc);
@@ -36,4 +26,19 @@ const serializeStaffClaim = (doc) => {
   return { _id: String(_id), ...rest };
 };
 
-module.exports = { serializeItem, serializeStaffItem, serializeClaim, serializeStaffClaim };
+/**
+ * Staff account as returned to the department UI.
+ * The password hash must never leave the server.
+ */
+const serializeStaff = (doc) => {
+  const plain = toPlain(doc);
+  const { __v, passwordHash, _id, ...rest } = plain;
+  return { _id: String(_id), ...rest };
+};
+
+module.exports = {
+  serializeItem,
+  serializeClaim,
+  serializeStaffClaim,
+  serializeStaff,
+};

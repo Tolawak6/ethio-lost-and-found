@@ -39,9 +39,17 @@ const config = {
     ? path.resolve(process.env.UPLOAD_DIR)
     : path.join(__dirname, 'uploads'),
   corsOrigin: parseOrigins(process.env.CORS_ORIGIN),
-  // Department key that unlocks create/update/delete endpoints.
-  // Empty => open (development/demo only); production requires it.
-  staffApiKey: process.env.STAFF_API_KEY || '',
+  // Secret used to sign department session tokens. Falls back to a random
+  // per-boot value in development (tokens then die with the process).
+  sessionSecret: process.env.SESSION_SECRET || '',
+  sessionHours: Number(process.env.SESSION_HOURS) || 12,
+  // First department account, created on boot when no staff exist.
+  bootstrapStaff: {
+    email: process.env.ADMIN_EMAIL || '',
+    password: process.env.ADMIN_PASSWORD || '',
+    name: process.env.ADMIN_NAME || 'Department staff',
+    depot: process.env.ADMIN_DEPOT || '',
+  },
   retentionDays: Number(process.env.RETENTION_DAYS) || 90,
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -58,10 +66,16 @@ const config = {
     : !isProduction,
 };
 
-if (isProduction && !config.staffApiKey) {
-  console.warn(
-    '[config] STAFF_API_KEY is not set — anyone can publish or delete items. Set it before going live.'
-  );
+if (!config.sessionSecret) {
+  config.sessionSecret = require('crypto').randomBytes(32).toString('hex');
+  if (!isTest) {
+    console.warn('[config] SESSION_SECRET is not set — using a random secret (sessions end on restart).');
+  }
+}
+
+if (!isProduction && !config.bootstrapStaff.email) {
+  // Keeps `npm run dev` usable out of the box.
+  config.bootstrapStaff = { email: 'admin@lostandfound.et', password: 'changeme123', name: 'Demo staff', depot: '' };
 }
 
 config.useCloudinary = Boolean(

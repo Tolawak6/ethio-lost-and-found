@@ -1,7 +1,8 @@
 const express = require('express');
-const { requireStaff } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware');
 const { buildFilter } = require('../store/filter');
+const { hashPassword } = require('../auth/passwords');
+const { validateStaffCreate } = require('../middleware/validateStaff');
 const config = require('../config');
 
 /**
@@ -12,7 +13,7 @@ const config = require('../config');
  *   PATCH /api/staff/claims/:id            approve / reject / mark collected
  *   GET   /api/staff/overview              dashboard counters
  */
-const createStaffRouter = (store) => {
+const createStaffRouter = (store, { requireStaff }) => {
   const router = express.Router();
 
   router.use(requireStaff);
@@ -21,6 +22,56 @@ const createStaffRouter = (store) => {
     if (store.isReady()) return next();
     return res.status(503).json({ error: 'Database unavailable' });
   };
+
+  /** Managers only: create and manage department accounts. */
+  const requireManager = (req, res, next) => {
+    if (req.staff?.role !== 'manager') {
+      return res.status(403).json({ error: 'Only a department manager can manage accounts' });
+    }
+    return next();
+  };
+
+  router.get('/accounts', requireManager, requireReady, asyncHandler(async (req, res) => {
+    res.json({ accounts: await store.staffAccounts.list() });
+  }));
+
+  router.post(
+    '/accounts',
+    requireManager,
+    requireReady,
+    validateStaffCreate,
+    asyncHandler(async (req, res) => {
+      const { email, name, password, depot, role } = req.validatedBody;
+      const existing = await store.staffAccounts.findByEmail(email);
+      if (existing) {
+        return res.status(409).json({ error: 'An account with that email already exists' });
+      }
+      const account = await store.staffAccounts.create({
+        email,
+        name,
+        depot,
+        role,
+        passwordHash: await hashPassword(password),
+      });
+      return res.status(201).json({ account });
+    })
+  );
+
+  router.patch('/accounts/:id', requireManager, requireReady, asyncHandler(async (req, res) => {
+    if (!store.staffAccounts.isValidId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid account id' });
+    }
+    const { active } = req.body || {};
+    if (typeof active !== 'boolean') {
+      return res.status(422).json({ error: 'active must be true or false' });
+    }
+    if (req.params.id === req.staff._id && active === false) {
+      return res.status(422).json({ error: 'You cannot deactivate your own account' });
+    }
+    const account = await store.staffAccounts.setActive(req.params.id, active);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    return res.json({ account });
+  }));
 
   router.get('/items', requireReady, asyncHandler(async (req, res) => {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);

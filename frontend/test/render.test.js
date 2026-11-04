@@ -26,6 +26,10 @@ const { default: Filters } = await load('/src/components/Filters.jsx');
 const { default: StatsBar } = await load('/src/components/StatsBar.jsx');
 const { default: EmptyState } = await load('/src/components/EmptyState.jsx');
 const { default: TrackClaim } = await load('/src/components/TrackClaim.jsx');
+const { default: AdminSignIn } = await load('/src/components/AdminSignIn.jsx');
+const { default: DepartmentWorkspace } = await load('/src/components/DepartmentWorkspace.jsx');
+const { default: AccountsPanel } = await load('/src/components/AccountsPanel.jsx');
+const { default: AdminPage } = await load('/src/AdminPage.jsx');
 const { default: App } = await load('/src/App.jsx');
 const { ToastProvider } = await load('/src/context/ToastContext.jsx');
 const utils = await load('/src/utils.js');
@@ -254,9 +258,117 @@ test('App renders the passenger hero, search and steps', () => {
     assert.match(html, /Search by item, route or plate number/);
     assert.match(html, /Bus plate number/);
     assert.match(html, /Track a claim/);
-    assert.match(html, /Department sign-in/);
     assert.match(html, /File a claim/);
     assert.match(html, /Merkato Terminal/);
+
+    // The department area is hidden: no sign-in control, link or URL on the
+    // public page (the words "department policy" are ordinary public copy).
+    assert.doesNotMatch(html, /Department sign-in/i);
+    assert.doesNotMatch(html, /Client sign-in|staff sign-in/i);
+    assert.doesNotMatch(html, /\/admin/);
+    assert.doesNotMatch(html, /<a[^>]+href="[^"]*admin/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ------------------------------------------------------ department (hidden)
+
+test('AdminSignIn asks for email and password only', () => {
+  expectHtml('AdminSignIn', React.createElement(AdminSignIn, { onSignIn: noop, submitting: false }), [
+    ['title', /Department sign-in/],
+    ['email field', /Work email/],
+    ['password field', /Password/],
+    ['submit', /Sign in/],
+    ['no key wording', /Accounts are created by a department manager/],
+    ['link back', /Back to the public register/],
+  ]);
+});
+
+test('AdminSignIn shows an error and a busy state', () => {
+  expectHtml(
+    'AdminSignIn error',
+    React.createElement(AdminSignIn, { onSignIn: noop, submitting: true, error: 'Email or password is incorrect.' }),
+    [
+      ['error', /Email or password is incorrect/],
+      ['busy state', /Signing in…/],
+      ['button disabled', /disabled=""/],
+    ]
+  );
+});
+
+/** Renders inside the toast provider, which these components rely on. */
+const inProvider = (element) => React.createElement(ToastProvider, null, element);
+
+const account = {
+  _id: 'acc1',
+  email: 'meron@depot.et',
+  name: 'Meron Tesfaye',
+  depot: 'Merkato',
+  role: 'manager',
+};
+
+test('DepartmentWorkspace shows the signed-in identity and tabs', () => {
+  expectHtml(
+    'DepartmentWorkspace',
+    inProvider(
+      React.createElement(DepartmentWorkspace, {
+        account,
+        categories: ['Wallet'],
+        agencies: ['Anbessa City Bus'],
+        onSignOut: noop,
+        onPublicChanged: noop,
+      })
+    ),
+    [
+      ['title', /Department workspace/],
+      ['identity', /Meron Tesfaye/],
+      ['depot', /Merkato depot/],
+      ['register tab', />Register/],
+      ['claims tab', />Claims/],
+      ['accounts tab', />Accounts/],
+      ['add item', /Add found item/],
+      ['sign out', /Sign out/],
+      ['public link', /View public register/],
+    ]
+  );
+});
+
+test('AccountsPanel hides account management from plain staff', () => {
+  const staffHtml = expectHtml(
+    'AccountsPanel as staff',
+    inProvider(React.createElement(AccountsPanel, { account: { ...account, role: 'staff' }, onSessionLost: noop })),
+    [
+      ['own password', /Your password/],
+      ['identity', /meron@depot\.et/],
+    ]
+  );
+  assert.doesNotMatch(staffHtml, /Department accounts/);
+  assert.doesNotMatch(staffHtml, /Create account/);
+});
+
+test('AccountsPanel gives managers the account tools', () => {
+  expectHtml(
+    'AccountsPanel as manager',
+    inProvider(React.createElement(AccountsPanel, { account, onSessionLost: noop })),
+    [
+      ['accounts heading', /Department accounts/],
+      ['create form', /Add a department account/],
+      ['role picker', /<option value="manager">Manager<\/option>/],
+      ['temporary password', /Temporary password/],
+    ]
+  );
+});
+
+test('AdminPage renders the sign-in gate when there is no session', () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'nope' }), { status: 401 });
+  try {
+    const html = reactRe(
+      renderToString(React.createElement(ToastProvider, null, React.createElement(AdminPage)))
+    );
+    // The first paint is the session check; the gate follows after the fetch.
+    assert.match(html, /Checking your session/);
   } finally {
     globalThis.fetch = originalFetch;
   }

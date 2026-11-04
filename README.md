@@ -30,11 +30,16 @@ Bus supervisor            Lost property department              Passenger
                               item marked Returned ─────────────▶ collects it with photo ID
 ```
 
-**Department side** (behind `STAFF_API_KEY`)
+**Department side** — hidden at **`/admin`**, email + password sign-in
 - Publish an item with its bus plate number, route, agency, date and photo
 - Record private identifying details that are never shown publicly
 - Review the claims passengers file: approve, reject or mark collected
 - Closing a claim as *Collected* automatically marks the item *Returned*
+- Managers create a separate account per depot and can disable accounts
+
+There is **no link to `/admin` anywhere on the public site** — staff reach it by
+typing the URL. Access is still enforced by the API on every request, so hiding
+the page is convenience, not the security boundary.
 
 **Passenger side** (public, no account)
 - Search by bus plate number, route, category or free text
@@ -48,11 +53,15 @@ Bus supervisor            Lost property department              Passenger
 
 ```bash
 npm run install:all     # install backend + frontend dependencies
-STAFF_API_KEY=office-demo npm run dev
+npm run dev
 ```
 
-Open <http://localhost:5173>. Click **Department sign-in** and use
-`office-demo` to add items; browse and claim as a passenger without signing in.
+- Public register: <http://localhost:5173>
+- Department area: <http://localhost:5173/admin>
+
+In development a first manager account is created automatically:
+**`admin@lostandfound.et` / `changeme123`**. Change it before deploying — see
+[Department accounts](#department-accounts).
 
 **It runs with zero configuration.** Without `MONGO_URI` the API uses an
 in-memory store seeded with demo bus records, and uploads go to
@@ -65,7 +74,7 @@ in-memory store seeded with demo bus records, and uploads go to
 
 ```bash
 cd backend
-cp .env.example .env       # set MONGO_URI and STAFF_API_KEY
+cp .env.example .env       # set MONGO_URI, ADMIN_EMAIL, ADMIN_PASSWORD, SESSION_SECRET
 npm run dev
 ```
 
@@ -75,12 +84,35 @@ An empty database is seeded with demo items on first boot
 ### Production build
 
 ```bash
-npm run build            # builds frontend/dist
-NODE_ENV=production MONGO_URI=... STAFF_API_KEY=... npm start
+npm run build
+NODE_ENV=production MONGO_URI=... SESSION_SECRET=... npm start
 ```
 
-Express serves the built frontend from `frontend/dist`, so one process on one
-port serves the whole product.
+Express serves the built frontend from `frontend/dist` (including the `/admin`
+deep link), so one process on one port serves the whole product.
+
+### Department accounts
+
+Accounts are individual — never a shared password — so every change can be
+traced back to a depot.
+
+1. **First account** — created on boot from `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+   when the database has no staff accounts. It is a **manager**.
+2. **More accounts** — a manager adds them in **`/admin` → Accounts**, or from
+   the command line:
+
+   ```bash
+   npm run create-staff -- --email hana@depot.et --name "Hana T." \
+     --password "a-long-password" --depot Merkato
+   ```
+
+3. **Passwords** — stored as salted scrypt hashes, never in plain text.
+   Everyone can change their own under **Accounts → Your password**.
+4. **Disabling** — a manager can disable an account; existing sessions for it
+   stop working immediately.
+
+Sessions are signed HMAC tokens (12 h by default) held in an `httpOnly` cookie,
+with the token also usable as a bearer header for scripts.
 
 ---
 
@@ -129,13 +161,30 @@ Base URL: `http://localhost:5000`
 }
 ```
 
-### Department (requires the `x-staff-key` header)
+### Authentication
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/auth/login` | `{ email, password }` → session token + account |
+| `POST` | `/api/auth/logout` | Clear the session cookie |
+| `GET` | `/api/auth/me` | Current account (used by `/admin` on load) |
+| `POST` | `/api/auth/password` | Change your own password |
+
+Sign-in is rate limited to 10 attempts per 15 minutes per IP. A wrong password
+and an unknown email return the same response.
+
+### Department (sign-in required)
+
+Send `Authorization: Bearer <token>`, or rely on the `staff_session` cookie.
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/staff/items` | Register including private details + claim counts |
 | `GET` | `/api/staff/items/:id/claims` | Claims filed for one item |
 | `PATCH` | `/api/staff/claims/:id` | Review a claim (`Approved`/`Rejected`/`Collected`) |
+| `GET` | `/api/staff/accounts` | List accounts — **managers only** |
+| `POST` | `/api/staff/accounts` | Create an account — **managers only** |
+| `PATCH` | `/api/staff/accounts/:id` | Enable/disable an account — **managers only** |
 | `POST` | `/api/items` | Publish an item (multipart, optional `image`) |
 | `PUT` / `PATCH` | `/api/items/:id` | Full / partial update |
 | `DELETE` | `/api/items/:id` | Delete the item, its claims and its image |
@@ -149,9 +198,10 @@ A claim moves the item to `Claim Pending`. Marking it `Collected` marks the item
 { "error": "Validation failed", "fields": { "plateNumber": "Enter a valid plate number, e.g. AA-3-12345" } }
 ```
 
-`400` bad id/JSON · `401` staff key missing · `404` not found · `409` claim not
-allowed · `413` image too large · `415` not an image · `422` validation ·
-`429` too many writes · `503` database unavailable
+`400` bad id/JSON · `401` not signed in / bad credentials · `403` not a manager ·
+`404` not found · `409` claim not allowed · `413` image too large · `415` not an
+image · `422` validation · `429` too many writes or sign-in attempts ·
+`503` database unavailable
 
 ---
 
@@ -163,15 +213,19 @@ Copy `backend/.env.example` → `backend/.env`.
 | --- | --- | --- |
 | `PORT` | `5000` | API port |
 | `MONGO_URI` | *(empty)* | MongoDB connection string; empty ⇒ in-memory store |
-| `STAFF_API_KEY` | *(empty)* | Department key; **required in production** |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | *(empty)* | First manager account, created when no staff exist |
+| `ADMIN_NAME` / `ADMIN_DEPOT` | `Department staff` / *(empty)* | Details for that account |
+| `SESSION_SECRET` | random per boot | Signing key for session tokens — **set in production** |
+| `SESSION_HOURS` | `12` | How long a sign-in lasts |
 | `RETENTION_DAYS` | `90` | How long items are held before disposal |
 | `SEED_DEMO_DATA` | on in dev | Demo records for an empty database |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | *(empty)* | Set all three to use Cloudinary |
 | `UPLOAD_DIR` | `backend/uploads` | Local image directory |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
 
-The department key is entered once in the browser and stored in
-`localStorage`; it is never bundled into the JavaScript.
+Session tokens are signed with `SESSION_SECRET`. Without it the server
+generates a random secret per boot, which is fine locally but signs everyone out
+on every restart.
 
 ---
 
@@ -185,8 +239,14 @@ backend/
   models/Item.js          Bus item schema, categories, agencies, lifecycle
   models/Claim.js         Passenger claims + reference codes
   routes/items.js         Public register, claims, department write routes
-  routes/staff.js         Department workspace endpoints
-  middleware/auth.js      Staff key check (timing-safe)
+  routes/staff.js         Department workspace + account management
+  routes/auth.js          Sign-in, sign-out, session, password change
+  auth/passwords.js       scrypt hashing and constant-time verification
+  auth/tokens.js          Signed session tokens (HMAC-SHA256)
+  auth/bootstrap.js       Creates the first manager account
+  models/Staff.js         Department accounts (login happens at /admin)
+  middleware/auth.js      Session check (token or cookie)
+  scripts/createStaff.js  CLI: npm run create-staff
   middleware/validateItem Validation for items and claims
   store/                  mongoStore | memoryStore behind one interface
   upload.js               Multer + Cloudinary/local storage
@@ -194,9 +254,11 @@ backend/
   tests/                  unit, API and Mongo integration tests
 frontend/
   src/App.jsx             Passenger board: hero, search, results, modals
+  src/AdminPage.jsx       Hidden /admin route: session gate + workspace
   src/components/         ItemCard, ItemModal, ClaimForm, TrackClaim,
-                          StaffPanel, ItemForm, Filters, StatsBar
-  src/api.js              Fetch client + staff key storage
+                          DepartmentWorkspace, AccountsPanel, AdminSignIn,
+                          ItemForm, Filters, StatsBar
+  src/api.js              Fetch client + session storage
   test/render.test.js     Server-render tests (no browser needed)
 ```
 
@@ -210,12 +272,13 @@ claim lifecycle), so routes never care which is active.
 
 ```bash
 npm test              # both apps
-npm run test:api      # 83 backend tests
-npm run test:web      # 16 frontend render tests
+npm run test:api      # 105 backend tests
+npm run test:web      # 22 frontend render tests
 ```
 
 - `backend/tests/unit.test.js` — validation, plate/phone rules, filters, uploads, memory store
-- `backend/tests/api.test.js` — full HTTP flow: staff auth, publishing, claiming, review, uploads, rate limiting
+- `backend/tests/auth.test.js` — hashing, tokens, sign-in, sessions, account management
+- `backend/tests/api.test.js` — full HTTP flow: auth, publishing, claiming, review, uploads, rate limiting
 - `backend/tests/items.test.js` — the same flows against real MongoDB via `mongodb-memory-server` (auto-skips offline)
 - `frontend/test/render.test.js` — renders every component and the app shell
 
@@ -230,7 +293,8 @@ push and pull request.
 ## Roadmap
 
 - [ ] SMS notification to the claimant when a claim is approved
-- [ ] Per-depot accounts instead of one shared department key
+- [x] Per-depot accounts with an audit trail of who changed what
+- [ ] Manager-only audit log of register changes
 - [ ] Automatic match alerts when a newly logged item fits an earlier enquiry
 - [ ] Amharic and Afaan Oromoo translations
 - [ ] Printable claim forms and a daily handover sheet for the office

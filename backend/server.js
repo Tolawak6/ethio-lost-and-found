@@ -1,6 +1,7 @@
 const config = require('./config');
 const { createApp } = require('./app');
 const { createStore, connectStore, seedIfEmpty } = require('./store');
+const { ensureFirstStaffAccount } = require('./auth/bootstrap');
 
 const start = async () => {
   const store = createStore();
@@ -11,6 +12,11 @@ const start = async () => {
       await seedIfEmpty(store);
     } catch (err) {
       console.warn('[db] seeding skipped:', err.message);
+    }
+    try {
+      await ensureFirstStaffAccount(store.staffAccounts);
+    } catch (err) {
+      console.warn('[auth] could not prepare the first staff account:', err.message);
     }
   }
 

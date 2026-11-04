@@ -60,7 +60,16 @@ const recordAudit = async (store, { action, entity, staff, entityId = '', entity
  * Compared before/after so the log says `status: In Storage → Returned`
  * rather than a vague "item edited".
  */
-const IGNORED_FIELDS = new Set(['updatedAt', 'createdAt', 'resolvedAt', 'imagePublicId']);
+// Volatile timestamps are noise in a change log, and the private fields must
+// never be copied into the trail — `findRaw` returns them so the diff has to
+// drop them explicitly.
+const IGNORED_FIELDS = new Set([
+  'updatedAt',
+  'createdAt',
+  'resolvedAt',
+  'imagePublicId',
+  'identifyingDetails',
+]);
 
 const describeChanges = (before = {}, after = {}) => {
   const changes = {};

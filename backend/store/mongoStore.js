@@ -76,8 +76,9 @@ const createMongoStore = () => ({
   },
 
   /** Raw document for internal checks (existence, status). */
+  /** Routing/authorisation view of an item — never the private fields. */
   async findRaw(id) {
-    return Item.findById(id).select('status plateNumber itemName identifyingDetails imagePublicId').lean();
+    return Item.findById(id).select('status plateNumber itemName depot imagePublicId').lean();
   },
 
   async create(payload) {
@@ -173,18 +174,24 @@ const createMongoStore = () => ({
 
   async listAudit({ filter = {}, page = 1, limit = 50 } = {}) {
     const query = {};
+    // Two independent constraints are each an $or, so they have to be combined
+    // with $and — writing both to query.$or would let the second replace the
+    // first and quietly widen the result set.
+    const and = [];
     if (filter.entity) query.entity = filter.entity;
     if (filter.entityId) query.entityId = filter.entityId;
     // An item's history also covers claim decisions made against it.
     if (filter.relatedItemId) {
       const id = filter.relatedItemId;
-      query.$or = [{ entityId: id }, { 'details.itemId': id }];
+      and.push({ $or: [{ entityId: id }, { 'details.itemId': id }] });
     }
     if (filter.action) query.action = filter.action;
     if (filter.actorId) query.actorId = filter.actorId;
     if (filter.depotScope) {
-      query.$or = [{ actorDepot: filter.depotScope }, { actorDepot: '' }, { actorDepot: { $exists: false } }];
+      // Own depot, plus legacy entries with no depot recorded.
+      and.push({ $or: [{ actorDepot: filter.depotScope }, { actorDepot: '' }, { actorDepot: { $exists: false } }] });
     }
+    if (and.length) query.$and = and;
     const [docs, total] = await Promise.all([
       AuditEntry.find(query)
         .sort({ createdAt: -1 })

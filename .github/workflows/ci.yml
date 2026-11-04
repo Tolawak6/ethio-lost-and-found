@@ -20,7 +20,30 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm test
+      - name: Run tests
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee /tmp/test-output.txt
+      - name: Summarise failures
+        if: failure()
+        run: |
+          # Surface the failing assertions as a check annotation. The raw job
+          # log needs admin rights to download, but annotations are readable
+          # from the PR, which makes a red build diagnosable at a glance.
+          {
+            echo "Failing assertions:"
+            echo
+            grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
+            echo
+            echo "First failure detail:"
+            echo
+            awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -60 || true
+            echo
+            echo "Skip reasons:"
+            echo
+            grep -oE 'MongoDB test server unavailable: [^"]*' /tmp/test-output.txt | sort -u | head -5 || true
+          } >&2
+          exit 1
 
   frontend:
     name: Frontend tests & build

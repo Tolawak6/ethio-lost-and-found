@@ -755,9 +755,18 @@ test('the trail excludes hidden item fields', async () => {
   const created = await request('POST', '/api/items', { body: form, staff: true });
   assert.equal(created.status, 201);
 
+  // The private note is returned by the pre-update read, so a status change is
+  // exactly where it could leak into the change log.
+  await request('PATCH', `/api/items/${created.body._id}`, { body: { status: 'Returned' }, staff: true });
+
   const trail = await request('GET', '/api/staff/items/' + created.body._id + '/audit', { staff: true });
+  assert.equal(trail.body.total, 2, 'the update should be recorded');
   const serialised = JSON.stringify(trail.body);
   assert.ok(!serialised.includes('spare key'), 'the private note must never reach the audit log');
+
+  // The private note still reaches the department through the register itself.
+  const staffList = await request('GET', '/api/staff/items', { staff: true });
+  assert.match(JSON.stringify(staffList.body), /spare key/);
 });
 
 test('a depot account only sees its own depot activity', async () => {
@@ -827,4 +836,46 @@ test('an item history includes claim decisions made against it', async () => {
   assert.equal(actions[0], 'claim.collected');
   assert.ok(actions.includes('item.created'), `expected item.created in ${actions}`);
   assert.equal(trail.body.entries[0].details.itemId, created.body._id);
+});
+
+test('an item history stays inside the depot scope', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+  const kalitiAuth = { authorization: `Bearer ${kalitiToken}` };
+
+  // Two items, one per depot, each with a claim decision recorded against it.
+  const merkatoItem = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const kalitiItem = await request('POST', '/api/items', {
+    body: { ...validItem(), itemName: 'Kaliti bag', plateNumber: 'AA-2-99999' },
+    headers: kalitiAuth,
+  });
+  assert.equal(kalitiItem.status, 201);
+
+  // A legacy Kaliti-depot entry with no actor depot must remain visible.
+  await store.recordAudit({ action: 'item.updated', entity: 'item', entityId: kalitiItem.body._id, actorDepot: '' });
+
+  // The item history and the depot filter are independent constraints: the
+  // history must not widen the scope back open.
+  const ownHistory = await request('GET', `/api/staff/items/${kalitiItem.body._id}/audit`, { headers: kalitiAuth });
+  assert.equal(ownHistory.status, 200);
+  assert.ok(ownHistory.body.entries.length >= 2, 'own item history should include the legacy entry');
+  assert.equal(
+    ownHistory.body.entries.filter((entry) => entry.actorDepot === 'Merkato').length,
+    0,
+    'a Kaliti account must not see Merkato entries in an item history'
+  );
+
+  // And the other depot's item is refused outright.
+  const otherHistory = await request('GET', `/api/staff/items/${merkatoItem.body._id}/audit`, { headers: kalitiAuth });
+  assert.equal(otherHistory.status, 403);
 });

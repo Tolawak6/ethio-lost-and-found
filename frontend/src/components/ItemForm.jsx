@@ -1,45 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 
 const EMPTY = {
-  type: 'Found',
   itemName: '',
   category: '',
-  location: '',
   description: '',
-  date: new Date().toISOString().slice(0, 10),
-  hiddenDetails: '',
-  contactName: '',
-  contactPhone: '',
-  contactEmail: '',
+  identifyingDetails: '',
+  agency: 'Anbessa City Bus',
+  plateNumber: '',
+  busCode: '',
+  route: '',
+  foundOnBoard: '',
+  foundAt: new Date().toISOString().slice(0, 10),
+  reportedBy: '',
+  storageOffice: 'Lost Property Office, Merkato',
 };
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Builds the form state from an item (edit mode) or the blank defaults. */
 const toFormValues = (item) => {
   if (!item) return EMPTY;
-  const values = Object.fromEntries(
-    Object.keys(EMPTY).map((key) => [key, item[key] ?? EMPTY[key]])
-  );
+  const values = Object.fromEntries(Object.keys(EMPTY).map((key) => [key, item[key] ?? EMPTY[key]]));
   return {
     ...EMPTY,
     ...values,
-    date: (item.date || item.createdAt || EMPTY.date).slice(0, 10),
-    // Proof details are write-only: never echo a stored value back.
-    hiddenDetails: '',
+    foundAt: (item.foundAt || item.createdAt || EMPTY.foundAt).slice(0, 10),
+    identifyingDetails: item.identifyingDetails || '',
   };
 };
 
-function ItemForm({ categories, initialItem, onSubmit, onCancel, submitting }) {
-  // Initialised from props rather than a useEffect so the first render is
-  // already correct (no flash of an empty form, no SSR mismatch).
+function ItemForm({ categories, agencies, initialItem, onSubmit, onCancel, submitting }) {
   const [values, setValues] = useState(() => toFormValues(initialItem));
   const [errors, setErrors] = useState({});
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(initialItem?.imageUrl || '');
   const fileInput = useRef(null);
 
-  // Object URLs created for previews must be released.
   useEffect(
     () => () => {
       if (preview.startsWith('blob:')) URL.revokeObjectURL(preview);
@@ -79,11 +74,9 @@ function ItemForm({ categories, initialItem, onSubmit, onCancel, submitting }) {
     const next = {};
     if (!values.itemName.trim()) next.itemName = 'Item name is required';
     if (!values.category) next.category = 'Choose a category';
-    if (!values.location.trim()) next.location = 'Where was it lost/found?';
-    if (!values.description.trim()) next.description = 'Add a short description';
-    if (values.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.contactEmail)) {
-      next.contactEmail = 'Enter a valid email address';
-    }
+    if (!values.description.trim()) next.description = 'Describe the item';
+    if (!values.plateNumber.trim()) next.plateNumber = 'Bus plate number is required';
+    if (!values.foundAt) next.foundAt = 'Date found is required';
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -102,97 +95,157 @@ function ItemForm({ categories, initialItem, onSubmit, onCancel, submitting }) {
 
   return (
     <form className="form" onSubmit={submit} noValidate>
-      <fieldset className="segmented">
-        <legend className="sr-only">Is this item lost or found?</legend>
-        {['Lost', 'Found'].map((type) => (
-          <label key={type} className={values.type === type ? 'segmented__item is-active' : 'segmented__item'}>
+      <div className="form__section">
+        <h4>The item</h4>
+        <div className="form__grid">
+          <label className="field">
+            <span>Item name *</span>
             <input
-              type="radio"
-              name="type"
-              value={type}
-              checked={values.type === type}
+              name="itemName"
+              value={values.itemName}
               onChange={change}
+              placeholder="e.g. Black leather wallet"
+              maxLength={120}
+              aria-invalid={Boolean(errors.itemName)}
             />
-            <span>{type === 'Lost' ? 'I lost something' : 'I found something'}</span>
+            {errors.itemName && <em className="field__error">{errors.itemName}</em>}
           </label>
-        ))}
-      </fieldset>
 
-      <div className="form__grid">
+          <label className="field">
+            <span>Category *</span>
+            <select name="category" value={values.category} onChange={change} aria-invalid={Boolean(errors.category)}>
+              <option value="">Select a category</option>
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
+            {errors.category && <em className="field__error">{errors.category}</em>}
+          </label>
+        </div>
+
         <label className="field">
-          <span>Item name *</span>
-          <input
-            name="itemName"
-            value={values.itemName}
+          <span>Description *</span>
+          <textarea
+            name="description"
+            rows={3}
+            value={values.description}
             onChange={change}
-            placeholder="e.g. Black leather wallet"
-            maxLength={120}
-            aria-invalid={Boolean(errors.itemName)}
+            placeholder="Colour, brand, condition, contents — what a passenger would recognise"
+            maxLength={2000}
+            aria-invalid={Boolean(errors.description)}
           />
-          {errors.itemName && <em className="field__error">{errors.itemName}</em>}
+          <em className="field__hint">{values.description.length}/2000</em>
+          {errors.description && <em className="field__error">{errors.description}</em>}
         </label>
 
         <label className="field">
-          <span>Category *</span>
-          <select name="category" value={values.category} onChange={change} aria-invalid={Boolean(errors.category)}>
-            <option value="">Select a category</option>
-            {categories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-          {errors.category && <em className="field__error">{errors.category}</em>}
-        </label>
-
-        <label className="field">
-          <span>Location *</span>
-          <input
-            name="location"
-            value={values.location}
+          <span>Identifying details (staff only)</span>
+          <textarea
+            name="identifyingDetails"
+            rows={2}
+            value={values.identifyingDetails}
             onChange={change}
-            placeholder="e.g. Meskel Square, Addis Ababa"
-            maxLength={160}
-            aria-invalid={Boolean(errors.location)}
+            placeholder="Details only the owner would know, e.g. ID name, marks, lock screen"
+            maxLength={300}
           />
-          {errors.location && <em className="field__error">{errors.location}</em>}
-        </label>
-
-        <label className="field">
-          <span>Date</span>
-          <input type="date" name="date" value={values.date} onChange={change} max={new Date().toISOString().slice(0, 10)} />
+          <em className="field__hint">Never shown publicly — used to verify claims.</em>
         </label>
       </div>
 
-      <label className="field">
-        <span>Description *</span>
-        <textarea
-          name="description"
-          rows={4}
-          value={values.description}
-          onChange={change}
-          placeholder="Colour, brand, marks, and where exactly it was found"
-          maxLength={2000}
-          aria-invalid={Boolean(errors.description)}
-        />
-        <em className="field__hint">{values.description.length}/2000</em>
-        {errors.description && <em className="field__error">{errors.description}</em>}
-      </label>
+      <div className="form__section">
+        <h4>Where it was found</h4>
+        <div className="form__grid">
+          <label className="field">
+            <span>Bus plate number *</span>
+            <input
+              name="plateNumber"
+              value={values.plateNumber}
+              onChange={change}
+              placeholder="AA-3-12345"
+              maxLength={20}
+              aria-invalid={Boolean(errors.plateNumber)}
+            />
+            {errors.plateNumber && <em className="field__error">{errors.plateNumber}</em>}
+          </label>
 
-      <label className="field">
-        <span>Proof details (kept private)</span>
-        <input
-          name="hiddenDetails"
-          value={values.hiddenDetails}
-          onChange={change}
-          placeholder="Something only the real owner knows, e.g. a scratch on the back"
-          maxLength={300}
-        />
-        <em className="field__hint">Never shown publicly — use it to verify a claim.</em>
-      </label>
+          <label className="field">
+            <span>Bus code</span>
+            <input name="busCode" value={values.busCode} onChange={change} placeholder="B-118" maxLength={20} />
+          </label>
 
-      <div className="field">
-        <span>Photo</span>
+          <label className="field">
+            <span>Agency</span>
+            <select name="agency" value={values.agency} onChange={change}>
+              {agencies.map((agency) => (
+                <option key={agency} value={agency}>
+                  {agency}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Route</span>
+            <input
+              name="route"
+              value={values.route}
+              onChange={change}
+              placeholder="Merkato – Bole"
+              maxLength={120}
+            />
+          </label>
+
+          <label className="field">
+            <span>Date found *</span>
+            <input
+              type="date"
+              name="foundAt"
+              value={values.foundAt}
+              onChange={change}
+              max={new Date().toISOString().slice(0, 10)}
+              aria-invalid={Boolean(errors.foundAt)}
+            />
+            {errors.foundAt && <em className="field__error">{errors.foundAt}</em>}
+          </label>
+
+          <label className="field">
+            <span>Found on board</span>
+            <input
+              name="foundOnBoard"
+              value={values.foundOnBoard}
+              onChange={change}
+              placeholder="Back seat, under seat 12…"
+              maxLength={60}
+            />
+          </label>
+
+          <label className="field">
+            <span>Reported by</span>
+            <input
+              name="reportedBy"
+              value={values.reportedBy}
+              onChange={change}
+              placeholder="Supervisor name"
+              maxLength={80}
+            />
+          </label>
+
+          <label className="field">
+            <span>Storage office</span>
+            <input
+              name="storageOffice"
+              value={values.storageOffice}
+              onChange={change}
+              maxLength={120}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="form__section">
+        <h4>Photo</h4>
         <div className="uploader">
           {preview ? (
             <img className="uploader__preview" src={preview} alt="Item preview" />
@@ -202,13 +255,7 @@ function ItemForm({ categories, initialItem, onSubmit, onCancel, submitting }) {
           <div className="uploader__controls">
             <label className="button button--ghost button--sm">
               {file ? 'Change photo' : 'Choose photo'}
-              <input
-                ref={fileInput}
-                type="file"
-                accept="image/*"
-                onChange={pickFile}
-                className="sr-only"
-              />
+              <input ref={fileInput} type="file" accept="image/*" onChange={pickFile} className="sr-only" />
             </label>
             {file && (
               <button type="button" className="button button--ghost button--sm" onClick={clearFile}>
@@ -221,36 +268,12 @@ function ItemForm({ categories, initialItem, onSubmit, onCancel, submitting }) {
         {errors.image && <em className="field__error">{errors.image}</em>}
       </div>
 
-      <div className="form__grid">
-        <label className="field">
-          <span>Your name</span>
-          <input name="contactName" value={values.contactName} onChange={change} maxLength={80} placeholder="Optional" />
-        </label>
-        <label className="field">
-          <span>Phone</span>
-          <input name="contactPhone" value={values.contactPhone} onChange={change} maxLength={40} placeholder="+251 …" />
-        </label>
-        <label className="field">
-          <span>Email</span>
-          <input
-            name="contactEmail"
-            type="email"
-            value={values.contactEmail}
-            onChange={change}
-            maxLength={120}
-            placeholder="Optional"
-            aria-invalid={Boolean(errors.contactEmail)}
-          />
-          {errors.contactEmail && <em className="field__error">{errors.contactEmail}</em>}
-        </label>
-      </div>
-
       <div className="form__actions">
         <button type="button" className="button button--ghost" onClick={onCancel} disabled={submitting}>
           Cancel
         </button>
         <button type="submit" className="button button--primary" disabled={submitting}>
-          {submitting ? 'Saving…' : initialItem ? 'Save changes' : 'Publish report'}
+          {submitting ? 'Saving…' : initialItem ? 'Save changes' : 'Add to register'}
         </button>
       </div>
     </form>

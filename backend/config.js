@@ -39,6 +39,10 @@ const config = {
     ? path.resolve(process.env.UPLOAD_DIR)
     : path.join(__dirname, 'uploads'),
   corsOrigin: parseOrigins(process.env.CORS_ORIGIN),
+  // Department key that unlocks create/update/delete endpoints.
+  // Empty => open (development/demo only); production requires it.
+  staffApiKey: process.env.STAFF_API_KEY || '',
+  retentionDays: Number(process.env.RETENTION_DAYS) || 90,
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
     apiKey: process.env.CLOUDINARY_API_KEY || '',
@@ -53,6 +57,12 @@ const config = {
     ? !['false', '0', 'no'].includes(process.env.SEED_DEMO_DATA.toLowerCase())
     : !isProduction,
 };
+
+if (isProduction && !config.staffApiKey) {
+  console.warn(
+    '[config] STAFF_API_KEY is not set — anyone can publish or delete items. Set it before going live.'
+  );
+}
 
 config.useCloudinary = Boolean(
   config.cloudinary.cloudName && config.cloudinary.apiKey && config.cloudinary.apiSecret

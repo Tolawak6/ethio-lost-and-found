@@ -1,12 +1,46 @@
 # Ethio Lost & Found
 
-A community lost-and-found board for Ethiopia. People report items they **lost**
-or **found**, search what others have posted, and arrange a safe handover.
+A lost property register for **Addis Ababa bus passengers**.
 
-- **Backend** — Node.js + Express 5 + Mongoose
+When a passenger leaves something on a bus, the supervisor hands it to the lost
+property department. Staff log the item — photo, bus plate number, route, date,
+where on the bus it was found and the office holding it. Passengers search the
+public register, file a claim with proof of ownership, and collect the item in
+person once the department approves it.
+
+- **Backend** — Node.js, Express 5, Mongoose
 - **Frontend** — React 19 + Vite (no UI framework, hand-written CSS)
 - **Images** — Cloudinary when configured, otherwise local disk
-- **Tests** — `node:test` for both apps, plus server-rendered component smoke tests
+- **Tests** — `node:test` for both apps, plus server-rendered component tests
+
+---
+
+## How it works
+
+```
+Bus supervisor            Lost property department              Passenger
+     │                              │                              │
+ finds item on the bus ───────────▶ logs it in the register ─────▶ searches by plate/route
+                                   (photo, plate, route, date)      finds the item
+                                                                         │
+                                   reviews the claim ◀──────────── files a claim with proof
+                                          │
+                              approves ───┴─── rejects
+                                          │
+                              item marked Returned ─────────────▶ collects it with photo ID
+```
+
+**Department side** (behind `STAFF_API_KEY`)
+- Publish an item with its bus plate number, route, agency, date and photo
+- Record private identifying details that are never shown publicly
+- Review the claims passengers file: approve, reject or mark collected
+- Closing a claim as *Collected* automatically marks the item *Returned*
+
+**Passenger side** (public, no account)
+- Search by bus plate number, route, category or free text
+- See where and when the item was found and which office holds it
+- File a claim with a phone number and proof of ownership, then get a reference
+  code (e.g. `EC-7Q2X9P`) to track the claim later
 
 ---
 
@@ -14,53 +48,39 @@ or **found**, search what others have posted, and arrange a safe handover.
 
 ```bash
 npm run install:all     # install backend + frontend dependencies
-npm run dev             # API on :5000, web app on :5173
+STAFF_API_KEY=office-demo npm run dev
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>. Click **Department sign-in** and use
+`office-demo` to add items; browse and claim as a passenger without signing in.
 
-**It runs with zero configuration.** If `MONGO_URI` is not set the API uses an
-in-memory store pre-filled with demo records, and uploads go to
-`backend/uploads/`. Data is lost when the server stops — set up MongoDB (below)
-when you want persistence.
+**It runs with zero configuration.** Without `MONGO_URI` the API uses an
+in-memory store seeded with demo bus records, and uploads go to
+`backend/uploads/`. Data is lost when the server stops.
+
+> The department key is only read from the environment. If it is left empty the
+> API stays open (convenient for local demos) and logs a warning in production.
 
 ### With MongoDB
 
 ```bash
 cd backend
-cp .env.example .env       # then edit MONGO_URI
+cp .env.example .env       # set MONGO_URI and STAFF_API_KEY
 npm run dev
 ```
 
-On first boot an empty database is seeded with a few demo items
-(set `SEED_DEMO_DATA=false` to disable).
+An empty database is seeded with demo items on first boot
+(`SEED_DEMO_DATA=false` disables this).
 
 ### Production build
 
 ```bash
 npm run build            # builds frontend/dist
-NODE_ENV=production MONGO_URI=... npm start
+NODE_ENV=production MONGO_URI=... STAFF_API_KEY=... npm start
 ```
 
-The API serves the built frontend from `frontend/dist`, so one process (and one
-port) serves everything.
-
----
-
-## Features
-
-| Area | What it does |
-| --- | --- |
-| Board | Responsive card grid with photos, Lost/Found and Open/Claimed badges |
-| Search | Debounced full-text search over name, description and location |
-| Filters | Type, category, status and location, combined with pagination |
-| Reporting | Lost/Found toggle, category picker, date, photo upload, contact info |
-| Claims | One-click "mark claimed" / reopen, with `resolvedAt` tracked |
-| Editing | Inline edit modal, image replacement cleans up the old file |
-| Privacy | `hiddenDetails` ("proof of ownership") is never returned by the API |
-| Safety | Guidance to verify ownership and meet in public places |
-| UX | Toasts, skeleton loading, empty states, retryable error banner, keyboard-dismissable modals |
-| A11y | Labelled inputs, `aria-invalid` errors, `aria-live` counts, focus-safe modals, reduced-motion support |
+Express serves the built frontend from `frontend/dist`, so one process on one
+port serves the whole product.
 
 ---
 
@@ -68,47 +88,70 @@ port) serves everything.
 
 Base URL: `http://localhost:5000`
 
+### Public
+
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/items` | Search the register (see parameters below) |
+| `GET` | `/api/items/:id` | One item, without private details |
+| `GET` | `/api/items/meta` | Categories, agencies, statuses, retention policy |
+| `GET` | `/api/items/stats` | Items in storage / in review / returned |
+| `GET` | `/api/items/plates` | Plate numbers for search suggestions |
+| `POST` | `/api/items/:id/claims` | File a claim → returns a reference code |
+| `GET` | `/api/items/claims/:reference` | Track a claim by its reference |
 | `GET` | `/api/health` | Liveness + database status |
-| `GET` | `/api/items` | List items (see query parameters) |
-| `GET` | `/api/items/:id` | Single item |
-| `GET` | `/api/items/meta` | Categories, statuses, types |
-| `GET` | `/api/items/stats` | Total / lost / found / claimed counts |
-| `POST` | `/api/items` | Create (multipart/form-data, optional `image`) |
-| `PUT` | `/api/items/:id` | Full update (all required fields) |
-| `PATCH` | `/api/items/:id` | Partial update (e.g. `{ "status": "Claimed" }`) |
-| `DELETE` | `/api/items/:id` | Delete, removing the stored image too |
 
-**List query parameters**
+**Search parameters**
 
 | Parameter | Example | Notes |
 | --- | --- | --- |
-| `search` | `?search=wallet` | Case-insensitive, regex-safe |
-| `type` | `?type=Lost` | `Lost` or `Found` |
+| `plateNumber` (or `plate`) | `?plateNumber=AA-3-12345` | Case-insensitive exact match |
+| `route` | `?route=bole` | Partial match |
+| `agency` | `?agency=Anbessa City Bus` | Must match `/api/items/meta` |
 | `category` | `?category=Wallet` | Must match `/api/items/meta` |
-| `status` | `?status=Claimed` | `Unclaimed` or `Claimed` |
-| `location` | `?location=bole` | Partial match |
-| `from` / `to` | `?from=2026-01-01` | Date range on the item date |
+| `status` | `?status=In Storage` | Storage lifecycle |
+| `search` | `?search=wallet` | Item, description, route, plate, bus code |
+| `from` / `to` | `?from=2026-01-01` | Range on the date the item was found |
 | `page` / `limit` | `?page=2&limit=10` | `limit` capped at 100 |
-
-Response shape:
 
 ```json
 {
-  "items": [ { "_id": "…", "itemName": "Black leather wallet", "status": "Unclaimed", "…": "…" } ],
+  "items": [
+    {
+      "_id": "…", "itemName": "Black leather wallet", "category": "Wallet",
+      "plateNumber": "AA-3-12345", "route": "Merkato – Bole",
+      "foundOnBoard": "Back seat", "foundAt": "2026-11-02T…",
+      "status": "In Storage", "storageOffice": "Lost Property Office, Merkato",
+      "storageDeadline": "2027-01-31T…"
+    }
+  ],
   "pagination": { "page": 1, "limit": 20, "total": 6, "totalPages": 1, "hasMore": false }
 }
 ```
 
+### Department (requires the `x-staff-key` header)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/staff/items` | Register including private details + claim counts |
+| `GET` | `/api/staff/items/:id/claims` | Claims filed for one item |
+| `PATCH` | `/api/staff/claims/:id` | Review a claim (`Approved`/`Rejected`/`Collected`) |
+| `POST` | `/api/items` | Publish an item (multipart, optional `image`) |
+| `PUT` / `PATCH` | `/api/items/:id` | Full / partial update |
+| `DELETE` | `/api/items/:id` | Delete the item, its claims and its image |
+
+A claim moves the item to `Claim Pending`. Marking it `Collected` marks the item
+`Returned`; rejecting the last pending claim puts it back `In Storage`.
+
 **Errors** are always JSON:
 
 ```json
-{ "error": "Validation failed", "fields": { "itemName": "itemName is required" } }
+{ "error": "Validation failed", "fields": { "plateNumber": "Enter a valid plate number, e.g. AA-3-12345" } }
 ```
 
-`400` bad id/JSON · `404` not found · `413` image too large · `415` not an image ·
-`422` validation · `429` too many writes · `503` database unavailable.
+`400` bad id/JSON · `401` staff key missing · `404` not found · `409` claim not
+allowed · `413` image too large · `415` not an image · `422` validation ·
+`429` too many writes · `503` database unavailable
 
 ---
 
@@ -120,11 +163,15 @@ Copy `backend/.env.example` → `backend/.env`.
 | --- | --- | --- |
 | `PORT` | `5000` | API port |
 | `MONGO_URI` | *(empty)* | MongoDB connection string; empty ⇒ in-memory store |
-| `MONGO_DB_NAME` | from URI | Optional database override |
-| `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | *(empty)* | Set all three to upload to Cloudinary |
+| `STAFF_API_KEY` | *(empty)* | Department key; **required in production** |
+| `RETENTION_DAYS` | `90` | How long items are held before disposal |
+| `SEED_DEMO_DATA` | on in dev | Demo records for an empty database |
+| `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | *(empty)* | Set all three to use Cloudinary |
 | `UPLOAD_DIR` | `backend/uploads` | Local image directory |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
-| `SEED_DEMO_DATA` | on in dev | Seed demo records into an empty DB |
+
+The department key is entered once in the browser and stored in
+`localStorage`; it is never bundled into the JavaScript.
 
 ---
 
@@ -135,22 +182,27 @@ backend/
   app.js                  Express app factory (middleware, routes, static)
   server.js               Entrypoint: pick a store, connect, seed, listen
   config.js               Env parsing + defaults
-  models/Item.js          Mongoose schema, categories, statuses, indexes
-  routes/items.js         REST routes, backed by the store interface
-  middleware/             Validation, async wrapper, JSON error handler
-  store/                  mongoStore | memoryStore behind one small interface
+  models/Item.js          Bus item schema, categories, agencies, lifecycle
+  models/Claim.js         Passenger claims + reference codes
+  routes/items.js         Public register, claims, department write routes
+  routes/staff.js         Department workspace endpoints
+  middleware/auth.js      Staff key check (timing-safe)
+  middleware/validateItem Validation for items and claims
+  store/                  mongoStore | memoryStore behind one interface
   upload.js               Multer + Cloudinary/local storage
+  seed.js                 Realistic demo bus records
   tests/                  unit, API and Mongo integration tests
 frontend/
-  src/App.jsx             Board, filters, pagination, modals
-  src/components/         ItemCard, ItemModal, ItemForm, Filters, StatsBar…
-  src/context/            Toast notifications
-  src/api.js              Fetch wrapper with typed errors
-  test/render.test.js     Server-render smoke tests (no browser needed)
+  src/App.jsx             Passenger board: hero, search, results, modals
+  src/components/         ItemCard, ItemModal, ClaimForm, TrackClaim,
+                          StaffPanel, ItemForm, Filters, StatsBar
+  src/api.js              Fetch client + staff key storage
+  test/render.test.js     Server-render tests (no browser needed)
 ```
 
 The `store/` layer is why the app runs without MongoDB: `mongoStore` and
-`memoryStore` implement the same interface, so routes never care which is active.
+`memoryStore` implement the same interface (including schema defaults and the
+claim lifecycle), so routes never care which is active.
 
 ---
 
@@ -158,24 +210,25 @@ The `store/` layer is why the app runs without MongoDB: `mongoStore` and
 
 ```bash
 npm test              # both apps
-npm run test:api      # 55 backend tests
-npm run test:web      # 11 frontend render tests
+npm run test:api      # 83 backend tests
+npm run test:web      # 16 frontend render tests
 ```
 
-- `backend/tests/unit.test.js` — validation, filters, uploads, memory store
-- `backend/tests/api.test.js` — full HTTP flow incl. uploads and rate limiting
-- `backend/tests/items.test.js` — same flows against real MongoDB via
-  `mongodb-memory-server`; auto-skips when the binary can't be downloaded
-- `frontend/test/render.test.js` — server-renders every component and the app shell
+- `backend/tests/unit.test.js` — validation, plate/phone rules, filters, uploads, memory store
+- `backend/tests/api.test.js` — full HTTP flow: staff auth, publishing, claiming, review, uploads, rate limiting
+- `backend/tests/items.test.js` — the same flows against real MongoDB via `mongodb-memory-server` (auto-skips offline)
+- `frontend/test/render.test.js` — renders every component and the app shell
 
-CI (`.github/workflows/ci.yml`) runs both suites and the frontend build on every push and pull request.
+CI (`.github/workflows/ci.yml`) runs both suites and the frontend build on every
+push and pull request.
 
 ---
 
 ## Roadmap
 
-- [ ] Moderation / admin review before a report goes live
-- [ ] Email or SMS notifications when a possible match is posted
-- [ ] Accounts so posters can manage their own reports
+- [ ] SMS notification to the claimant when a claim is approved
+- [ ] Per-depot accounts instead of one shared department key
+- [ ] Automatic match alerts when a newly logged item fits an earlier enquiry
 - [ ] Amharic and Afaan Oromoo translations
-- [ ] Map view of where items were lost or found
+- [ ] Printable claim forms and a daily handover sheet for the office
+- [ ] Report an item that has not been handed in yet (passenger-side lost report)

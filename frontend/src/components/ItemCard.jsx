@@ -1,12 +1,19 @@
-import { formatDate, imageSrc } from '../utils';
+import { formatDate, imageSrc, statusMeta, daysUntil } from '../utils';
 
-function ItemCard({ item, onOpen, onToggleStatus }) {
+function ItemCard({ item, onOpen }) {
   const image = imageSrc(item.imageUrl);
-  const claimed = item.status === 'Claimed';
+  const status = statusMeta(item.status);
+  const daysLeft = daysUntil(item.storageDeadline);
+  const closingSoon = daysLeft !== null && daysLeft >= 0 && daysLeft <= 14;
 
   return (
-    <article className={`card${claimed ? ' card--claimed' : ''}`}>
-      <button type="button" className="card__media" onClick={() => onOpen(item)} aria-label={`View ${item.itemName}`}>
+    <article className={`card card--${status.tone}`}>
+      <button
+        type="button"
+        className="card__media"
+        onClick={() => onOpen(item)}
+        aria-label={`View ${item.itemName}`}
+      >
         {image ? (
           <img src={image} alt={item.itemName} loading="lazy" />
         ) : (
@@ -14,10 +21,8 @@ function ItemCard({ item, onOpen, onToggleStatus }) {
             <span>{item.category}</span>
           </div>
         )}
-        <span className={`badge badge--type badge--${item.type?.toLowerCase()}`}>{item.type || 'Found'}</span>
-        <span className={`badge badge--status ${claimed ? 'badge--claimed' : 'badge--open'}`}>
-          {claimed ? 'Claimed' : 'Open'}
-        </span>
+        <span className="badge badge--plate">{item.plateNumber}</span>
+        <span className={`badge badge--status badge--${status.tone}`}>{status.label}</span>
       </button>
 
       <div className="card__body">
@@ -25,18 +30,28 @@ function ItemCard({ item, onOpen, onToggleStatus }) {
           <h3>{item.itemName}</h3>
           <span className="card__category">{item.category}</span>
         </div>
+
+        <p className="card__route">
+          <span aria-hidden="true">🚌</span> {item.route || item.agency}
+        </p>
         <p className="card__description">{item.description}</p>
 
         <dl className="card__meta">
           <div>
-            <dt>Location</dt>
-            <dd>{item.location}</dd>
+            <dt>Found</dt>
+            <dd>{formatDate(item.foundAt)}</dd>
           </div>
           <div>
-            <dt>Date</dt>
-            <dd>{formatDate(item.date || item.createdAt)}</dd>
+            <dt>On board</dt>
+            <dd>{item.foundOnBoard || '—'}</dd>
           </div>
         </dl>
+
+        {closingSoon && (
+          <p className="card__deadline">
+            ⏳ Held {daysLeft === 0 ? 'until today' : `for ${daysLeft} more day${daysLeft === 1 ? '' : 's'}`}
+          </p>
+        )}
 
         <div className="card__actions">
           <button type="button" className="button button--ghost button--sm" onClick={() => onOpen(item)}>
@@ -44,10 +59,11 @@ function ItemCard({ item, onOpen, onToggleStatus }) {
           </button>
           <button
             type="button"
-            className={`button button--sm ${claimed ? 'button--ghost' : 'button--primary'}`}
-            onClick={() => onToggleStatus(item)}
+            className="button button--primary button--sm"
+            onClick={() => onOpen(item, { claim: true })}
+            disabled={item.status === 'Returned' || item.status === 'Disposed'}
           >
-            {claimed ? 'Reopen' : 'Mark claimed'}
+            This is mine
           </button>
         </div>
       </div>

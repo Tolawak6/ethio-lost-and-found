@@ -4,22 +4,26 @@ import { api } from './api';
 import { useToast } from './context/ToastContext';
 import ItemCard from './components/ItemCard';
 import ItemModal from './components/ItemModal';
-import ItemForm from './components/ItemForm';
 import Filters from './components/Filters';
 import StatsBar from './components/StatsBar';
 import EmptyState from './components/EmptyState';
+import TrackClaim from './components/TrackClaim';
+import StaffPanel from './components/StaffPanel';
 import { debounce } from './utils';
 
 const DEFAULT_FILTERS = {
   search: '',
-  type: '',
+  plateNumber: '',
+  agency: '',
   category: '',
   status: '',
-  location: '',
   page: 1,
 };
 
-const DEFAULT_CATEGORIES = ['Electronics', 'Wallet', 'Keys', 'Documents', 'ID & Cards', 'Books', 'Clothing', 'Bags', 'Jewelry', 'Pets', 'Other'];
+const FALLBACK = {
+  categories: ['Electronics', 'Wallet', 'Keys', 'Documents', 'ID & Cards', 'Books', 'Clothing', 'Bags', 'Jewelry', 'Pets', 'Other'],
+  agencies: ['Anbessa City Bus', 'Sheger Mass Transport', 'Addis Ababa Light Rail', 'Minibus (Blue/White)', 'Other'],
+};
 
 export default function App() {
   const toast = useToast();
@@ -29,14 +33,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [stats, setStats] = useState(null);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [meta, setMeta] = useState(FALLBACK);
+  const [plates, setPlates] = useState([]);
   const [activeItem, setActiveItem] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [claimIntent, setClaimIntent] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+  const [trackingOpen, setTrackingOpen] = useState(false);
+  const [staffOpen, setStaffOpen] = useState(false);
   const requestId = useRef(0);
 
-  // Debounce text search so typing does not hammer the API.
   const applySearch = useMemo(
     () => debounce((value) => setFilters((current) => ({ ...current, search: value, page: 1 })), 350),
     []
@@ -46,21 +51,21 @@ export default function App() {
     applySearch(searchInput);
   }, [searchInput, applySearch]);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([api.getMeta(), api.getStats()])
-      .then(([meta, summary]) => {
-        if (cancelled) return;
-        if (Array.isArray(meta?.categories) && meta.categories.length) setCategories(meta.categories);
+  const refreshMeta = useCallback(() => {
+    Promise.all([api.getMeta(), api.getStats(), api.getPlates()])
+      .then(([metaPayload, summary, platePayload]) => {
+        if (metaPayload?.categories?.length) setMeta(metaPayload);
         setStats(summary);
+        setPlates(platePayload?.plates || []);
       })
       .catch(() => {
-        /* non fatal: the board still works with defaults */
+        /* the board still works with fallbacks */
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    refreshMeta();
+  }, [refreshMeta]);
 
   const loadItems = useCallback(async () => {
     const id = ++requestId.current;
@@ -83,100 +88,70 @@ export default function App() {
     loadItems();
   }, [loadItems]);
 
-  const refreshStats = useCallback(() => {
-    api.getStats().then(setStats).catch(() => {});
-  }, []);
+  const refreshAll = useCallback(() => {
+    loadItems();
+    refreshMeta();
+  }, [loadItems, refreshMeta]);
 
-  const afterMutation = useCallback(
-    (message) => {
-      toast.success(message);
-      loadItems();
-      refreshStats();
-    },
-    [loadItems, refreshStats, toast]
-  );
+  const openItem = (item, options = {}) => {
+    setActiveItem(item);
+    setClaimIntent(Boolean(options.claim));
+  };
 
-  const handleCreate = async (formData) => {
-    setSubmitting(true);
+  const handleClaim = async (item, claim) => {
+    setClaiming(true);
     try {
-      await api.createItem(formData);
-      setComposerOpen(false);
-      setFilters(DEFAULT_FILTERS);
-      setSearchInput('');
-      afterMutation('Report published — thank you!');
+      const result = await api.fileClaim(item._id, claim);
+      refreshAll();
+      return result;
     } catch (err) {
-      if (err.fields && Object.keys(err.fields).length) {
-        toast.error(Object.values(err.fields)[0]);
-      } else {
-        toast.error(err.message || 'Could not publish the report');
-      }
+      if (err.status === 409) toast.error(err.message);
+      else if (err.fields && Object.keys(err.fields).length) toast.error(Object.values(err.fields)[0]);
+      else toast.error(err.message || 'Could not submit the claim');
+      return null;
     } finally {
-      setSubmitting(false);
+      setClaiming(false);
     }
   };
 
-  const handleUpdate = async (formData) => {
-    setSubmitting(true);
-    try {
-      const updated = await api.updateItem(editing._id, formData);
-      setEditing(null);
-      setActiveItem(updated);
-      afterMutation('Report updated');
-    } catch (err) {
-      toast.error(err.message || 'Could not update the report');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleToggleStatus = async (item) => {
-    const nextStatus = item.status === 'Claimed' ? 'Unclaimed' : 'Claimed';
-    try {
-      const updated = await api.setStatus(item._id, nextStatus);
-      setActiveItem((current) => (current && current._id === updated._id ? updated : current));
-      afterMutation(nextStatus === 'Claimed' ? 'Marked as claimed 🎉' : 'Report reopened');
-    } catch (err) {
-      toast.error(err.message || 'Could not change the status');
-    }
-  };
-
-  const handleDelete = async (item) => {
-    try {
-      await api.deleteItem(item._id);
-      setActiveItem(null);
-      afterMutation('Report deleted');
-    } catch (err) {
-      toast.error(err.message || 'Could not delete the report');
-    }
-  };
-
+  const hasFilters = ['search', 'plateNumber', 'agency', 'category', 'status'].some((key) => filters[key]);
   const { items, pagination } = data;
 
   return (
     <div className="app">
       <header className="hero">
         <div className="hero__inner">
-          <div className="brand">
-            <span className="brand__mark" aria-hidden="true">⌖</span>
-            <div>
-              <p className="brand__name">Ethio Lost &amp; Found</p>
-              <p className="brand__tag">Reuniting people with what matters</p>
+          <div className="hero__bar">
+            <div className="brand">
+              <span className="brand__mark" aria-hidden="true">⌖</span>
+              <div>
+                <p className="brand__name">Ethio Lost &amp; Found</p>
+                <p className="brand__tag">Addis Ababa bus lost property</p>
+              </div>
+            </div>
+            <div className="hero__links">
+              <button type="button" className="link-button link-button--light" onClick={() => setTrackingOpen(true)}>
+                Track a claim
+              </button>
+              <button type="button" className="link-button link-button--light" onClick={() => setStaffOpen(true)}>
+                Department sign-in
+              </button>
             </div>
           </div>
 
           <div className="hero__copy">
-            <h1>Lost something? Found something?</h1>
+            <h1>Left something on the bus?</h1>
             <p>
-              A free community board for Addis Ababa and beyond. Post what you lost or found,
-              search what others have reported, and arrange a safe handover.
+              Bus supervisors hand lost items to the lost property office. Search the register below
+              by bus plate number, route or item — then file a claim online and collect it in person.
             </p>
             <div className="hero__actions">
-              <button type="button" className="button button--primary" onClick={() => setComposerOpen(true)}>
-                + Report an item
-              </button>
-              <a className="button button--ghost" href="#board">
-                Browse reports
+              <a className="button button--primary" href="#board">
+                Search the register
               </a>
+              <button type="button" className="button button--ghost" onClick={() => setTrackingOpen(true)}>
+                Track my claim
+              </button>
             </div>
           </div>
 
@@ -188,7 +163,9 @@ export default function App() {
         <div className="main__toolbar">
           <Filters
             filters={{ ...filters, search: searchInput }}
-            categories={categories}
+            categories={meta.categories}
+            agencies={meta.agencies}
+            plates={plates}
             total={pagination?.total ?? items.length}
             onChange={(next) => {
               setFilters(next);
@@ -201,13 +178,28 @@ export default function App() {
           />
         </div>
 
+        <div className="how-it-works">
+          <div>
+            <span className="how-it-works__step">1</span>
+            <p><strong>Search</strong> by plate, route or item</p>
+          </div>
+          <div>
+            <span className="how-it-works__step">2</span>
+            <p><strong>File a claim</strong> with proof it is yours</p>
+          </div>
+          <div>
+            <span className="how-it-works__step">3</span>
+            <p><strong>Collect</strong> it at the office with your ID</p>
+          </div>
+        </div>
+
         {error && (
           <div className="notice notice--error">
             <div>
-              <strong>Could not load reports.</strong>
+              <strong>Could not load the register.</strong>
               <p>
                 {error.status === 503 || error.message?.includes('fetch')
-                  ? 'The API or database is unavailable. Start MongoDB and the backend, then retry.'
+                  ? 'The service is unavailable right now. Please try again in a moment.'
                   : error.message}
               </p>
             </div>
@@ -227,20 +219,16 @@ export default function App() {
 
         {!loading && !error && items.length === 0 && (
           <EmptyState
-            title={filters.search || filters.category || filters.type ? 'No matching reports' : 'Nothing on the board yet'}
+            title={hasFilters ? 'No items match that search' : 'The register is empty'}
             message={
-              filters.search || filters.category || filters.type
-                ? 'Try a different search, or clear the filters to see everything.'
-                : 'Be the first to post a lost or found item in your area.'
+              hasFilters
+                ? 'Try a different plate number or check the spelling. Items are usually logged within 24 hours of being handed in.'
+                : 'Items handed in by bus supervisors will appear here.'
             }
-            actionLabel={filters.search || filters.category || filters.type ? 'Clear filters' : 'Report an item'}
+            actionLabel={hasFilters ? 'Clear filters' : undefined}
             onAction={() => {
-              if (filters.search || filters.category || filters.type) {
-                setFilters(DEFAULT_FILTERS);
-                setSearchInput('');
-              } else {
-                setComposerOpen(true);
-              }
+              setFilters(DEFAULT_FILTERS);
+              setSearchInput('');
             }}
           />
         )}
@@ -248,7 +236,7 @@ export default function App() {
         {items.length > 0 && (
           <div className="grid">
             {items.map((item) => (
-              <ItemCard key={item._id} item={item} onOpen={setActiveItem} onToggleStatus={handleToggleStatus} />
+              <ItemCard key={item._id} item={item} onOpen={openItem} />
             ))}
           </div>
         )}
@@ -279,52 +267,44 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <p>Ethio Lost &amp; Found · built for the community</p>
-        <p className="footer__hint">
-          Safety tip: meet in a public place and verify ownership with details that are not listed publicly.
-        </p>
+        <div className="footer__inner">
+          <div>
+            <p className="footer__title">Ethio Lost &amp; Found</p>
+            <p className="footer__hint">
+              Items are held for 90 days at the depot office, then disposed of according to
+              department policy.
+            </p>
+          </div>
+          <div className="footer__contact">
+            <p><strong>Lost Property Office</strong></p>
+            <p>Merkato Terminal, Addis Ababa</p>
+            <p>Mon–Sat, 8:30 – 17:30</p>
+          </div>
+        </div>
       </footer>
 
-      {activeItem && !editing && (
+      {activeItem && (
         <ItemModal
           item={activeItem}
-          onClose={() => setActiveItem(null)}
-          onToggleStatus={handleToggleStatus}
-          onDelete={handleDelete}
-          onEdit={(item) => {
+          initialClaim={claimIntent}
+          submitting={claiming}
+          onClose={() => {
             setActiveItem(null);
-            setEditing(item);
+            setClaimIntent(false);
           }}
+          onClaim={handleClaim}
         />
       )}
 
-      {(composerOpen || editing) && (
-        <div className="modal" role="dialog" aria-modal="true" aria-label={editing ? 'Edit report' : 'New report'}>
-          <div className="modal__panel modal__panel--form">
-            <button
-              type="button"
-              className="modal__close"
-              onClick={() => {
-                setComposerOpen(false);
-                setEditing(null);
-              }}
-              aria-label="Close"
-            >
-              ×
-            </button>
-            <h2 className="modal__title">{editing ? 'Edit report' : 'Report a lost or found item'}</h2>
-            <ItemForm
-              categories={categories}
-              initialItem={editing}
-              submitting={submitting}
-              onSubmit={editing ? handleUpdate : handleCreate}
-              onCancel={() => {
-                setComposerOpen(false);
-                setEditing(null);
-              }}
-            />
-          </div>
-        </div>
+      {trackingOpen && <TrackClaim onClose={() => setTrackingOpen(false)} />}
+
+      {staffOpen && (
+        <StaffPanel
+          categories={meta.categories}
+          agencies={meta.agencies}
+          onClose={() => setStaffOpen(false)}
+          onChanged={refreshAll}
+        />
       )}
     </div>
   );

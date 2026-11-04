@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
 const { createItemsRouter } = require('./routes/items');
+const { createStaffRouter } = require('./routes/staff');
 const { asyncHandler, notFound, errorHandler } = require('./middleware');
 
 /**
@@ -71,6 +72,11 @@ const createApp = (store, { serveFrontend } = {}) => {
       endpoints: [
         'GET /api/items',
         'GET /api/items/:id',
+        'POST /api/items/:id/claims',
+        'GET /api/items/claims/:reference',
+        'GET /api/staff/items  (department)',
+        'PATCH /api/staff/claims/:id  (department)',
+        'GET /api/items/:id',
         'GET /api/items/meta',
         'GET /api/items/stats',
         'POST /api/items',
@@ -103,6 +109,7 @@ const createApp = (store, { serveFrontend } = {}) => {
     return next();
   });
   app.use('/api/items', itemsRouter);
+  app.use('/api/staff', createStaffRouter(store));
 
   // Locally stored images (used when Cloudinary is not configured).
   fs.mkdirSync(config.uploadDir, { recursive: true });

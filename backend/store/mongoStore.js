@@ -1,40 +1,46 @@
 const mongoose = require('mongoose');
 const { Item } = require('../models/Item');
-const { serializeItem } = require('./serialize');
+const { Claim } = require('../models/Claim');
+const { serializeItem, serializeClaim, serializeStaffClaim } = require('./serialize');
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const toQuery = (filter) => {
   const conditions = [];
-  if (filter.type) conditions.push({ type: filter.type });
   if (filter.category) conditions.push({ category: filter.category });
   if (filter.status) conditions.push({ status: filter.status });
-  if (filter.location) {
-    conditions.push({ location: { $regex: escapeRegex(filter.location), $options: 'i' } });
+  if (filter.agency) conditions.push({ agency: filter.agency });
+  if (filter.plateNumber) conditions.push({ plateNumber: filter.plateNumber });
+  if (filter.route) {
+    conditions.push({ route: { $regex: escapeRegex(filter.route), $options: 'i' } });
   }
   if (filter.from || filter.to) {
     const range = {};
     if (filter.from) range.$gte = filter.from;
     if (filter.to) range.$lte = filter.to;
-    conditions.push({ date: range });
+    conditions.push({ foundAt: range });
   }
   if (filter.search) {
     const pattern = new RegExp(escapeRegex(filter.search), 'i');
-    conditions.push({ $or: [{ itemName: pattern }, { description: pattern }, { location: pattern }] });
+    conditions.push({
+      $or: [
+        { itemName: pattern },
+        { description: pattern },
+        { route: pattern },
+        { plateNumber: pattern },
+        { busCode: pattern },
+      ],
+    });
   }
   if (!conditions.length) return {};
   return conditions.length === 1 ? conditions[0] : { $and: conditions };
 };
 
-const PUBLIC_PROJECTION = '-__v -imagePublicId -hiddenDetails';
+const PUBLIC_PROJECTION = '-__v -imagePublicId -identifyingDetails';
 
 const createMongoStore = () => ({
   kind: 'mongodb',
 
-  async init() {
-    mongoose.set('strictQuery', true);
-    return mongoose.connection.readyState === 1;
-  },
 
   isReady() {
     return mongoose.connection.readyState === 1;
@@ -44,11 +50,13 @@ const createMongoStore = () => ({
     return mongoose.isValidObjectId(id);
   },
 
+  // --- items --------------------------------------------------------------
+
   async list({ filter, page, limit }) {
     const query = toQuery(filter);
     const [docs, total] = await Promise.all([
       Item.find(query)
-        .sort({ createdAt: -1 })
+        .sort({ foundAt: -1, createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .select(PUBLIC_PROJECTION)
@@ -63,13 +71,18 @@ const createMongoStore = () => ({
     return doc ? serializeItem(doc) : null;
   },
 
+  /** Raw document for internal checks (existence, status). */
+  async findRaw(id) {
+    return Item.findById(id).select('status plateNumber itemName identifyingDetails imagePublicId').lean();
+  },
+
   async create(payload) {
     const doc = await Item.create(payload);
     return serializeItem(doc);
   },
 
   async update(id, changes) {
-    const doc = await Item.findById(id).select('+imagePublicId +hiddenDetails');
+    const doc = await Item.findById(id).select('+imagePublicId +identifyingDetails');
     if (!doc) return null;
 
     const previousImageUrl = doc.imageUrl;
@@ -77,33 +90,90 @@ const createMongoStore = () => ({
     Object.assign(doc, changes);
     await doc.save();
 
-    return {
-      item: serializeItem(doc),
-      previousImageUrl,
-      previousPublicId,
-    };
-  },
-
-  async getPrivate(id) {
-    const doc = await Item.findById(id).select('+imagePublicId +hiddenDetails').lean();
-    return doc ? { imagePublicId: doc.imagePublicId, hiddenDetails: doc.hiddenDetails } : null;
+    return { item: serializeItem(doc), previousImageUrl, previousPublicId };
   },
 
   async remove(id) {
     const doc = await Item.findByIdAndDelete(id).select('+imagePublicId');
     if (!doc) return null;
+    await Claim.deleteMany({ item: doc._id });
     return { item: serializeItem(doc), imagePublicId: doc.imagePublicId };
   },
 
   async stats() {
-    const [total, lost, found, claimed, unclaimed] = await Promise.all([
+    const [total, inStorage, pending, returned, claimsPending] = await Promise.all([
       Item.countDocuments(),
-      Item.countDocuments({ type: 'Lost' }),
-      Item.countDocuments({ type: 'Found' }),
-      Item.countDocuments({ status: 'Claimed' }),
-      Item.countDocuments({ status: 'Unclaimed' }),
+      Item.countDocuments({ status: 'In Storage' }),
+      Item.countDocuments({ status: 'Claim Pending' }),
+      Item.countDocuments({ status: 'Returned' }),
+      Claim.countDocuments({ status: 'Pending' }),
     ]);
-    return { total, lost, found, claimed, unclaimed };
+    return { total, inStorage, pending, returned, claimsPending };
+  },
+
+  /** Distinct plate numbers, for search suggestions. */
+  async plates(limit = 20) {
+    const values = await Item.distinct('plateNumber');
+    return values.filter(Boolean).slice(0, limit);
+  },
+
+  // --- claims -------------------------------------------------------------
+
+  async createClaim(payload) {
+    const doc = await Claim.create(payload);
+    return serializeClaim(doc);
+  },
+
+  async listClaims(itemId) {
+    const docs = await Claim.find({ item: itemId }).sort({ createdAt: -1 }).lean();
+    return docs.map(serializeStaffClaim);
+  },
+
+  async getClaim(id) {
+    const doc = await Claim.findById(id).lean();
+    return doc ? serializeClaim(doc) : null;
+  },
+
+  async findClaimForReview(id) {
+    return Claim.findById(id).lean();
+  },
+
+  async updateClaim(id, changes) {
+    const doc = await Claim.findByIdAndUpdate(
+      id,
+      { ...changes, reviewedAt: changes.status && changes.status !== 'Pending' ? new Date() : null },
+      { new: true }
+    ).lean();
+    return doc ? serializeStaffClaim(doc) : null;
+  },
+
+  async getPrivateItem(id) {
+    const doc = await Item.findById(id).select('+identifyingDetails').lean();
+    return doc ? { identifyingDetails: doc.identifyingDetails } : null;
+  },
+
+  async findClaimByReference(reference) {
+    const doc = await Claim.findOne({ reference }).lean();
+    if (!doc) return null;
+    const item = await Item.findById(doc.item).select('itemName plateNumber status storageOffice').lean();
+    return {
+      reference: doc.reference,
+      status: doc.status,
+      submittedAt: doc.createdAt,
+      item: item
+        ? {
+            _id: String(item._id),
+            itemName: item.itemName,
+            plateNumber: item.plateNumber,
+            status: item.status,
+            storageOffice: item.storageOffice,
+          }
+        : null,
+    };
+  },
+
+  async countPendingClaims(itemId) {
+    return Claim.countDocuments({ item: itemId, status: 'Pending' });
   },
 });
 

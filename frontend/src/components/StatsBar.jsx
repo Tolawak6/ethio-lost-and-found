@@ -1,13 +1,13 @@
 function StatsBar({ stats }) {
   const cards = [
-    { key: 'total', label: 'Total reports', tone: 'neutral' },
-    { key: 'lost', label: 'Lost', tone: 'lost' },
-    { key: 'found', label: 'Found', tone: 'found' },
-    { key: 'claimed', label: 'Reunited', tone: 'claimed' },
+    { key: 'inStorage', label: 'Items waiting', tone: 'storage' },
+    { key: 'pending', label: 'Claims in review', tone: 'pending' },
+    { key: 'returned', label: 'Reunited', tone: 'returned' },
+    { key: 'total', label: 'Total logged', tone: 'neutral' },
   ];
 
   return (
-    <section className="stats" aria-label="Community summary">
+    <section className="stats" aria-label="Lost property summary">
       {cards.map((card) => (
         <div key={card.key} className={`stat stat--${card.tone}`}>
           <span className="stat__value">{stats ? stats[card.key] ?? 0 : '–'}</span>

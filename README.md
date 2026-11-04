@@ -219,6 +219,9 @@ npm run test:web      # 16 frontend render tests
 - `backend/tests/items.test.js` — the same flows against real MongoDB via `mongodb-memory-server` (auto-skips offline)
 - `frontend/test/render.test.js` — renders every component and the app shell
 
+The MongoDB suite downloads a database binary on first run. Where that is not
+possible it skips itself, so `npm test` still passes; in CI it runs in full.
+
 CI (`.github/workflows/ci.yml`) runs both suites and the frontend build on every
 push and pull request.
 

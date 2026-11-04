@@ -40,6 +40,9 @@ const buildFilter = (query = {}) => {
   const route = asString(query.route);
   if (route) filter.route = route.slice(0, 120);
 
+  const depot = asString(query.depot);
+  if (depot) filter.depot = depot.slice(0, 80);
+
   const search = asString(query.search);
   if (search) filter.search = search.slice(0, 100);
 

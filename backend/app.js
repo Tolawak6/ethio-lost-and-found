@@ -18,6 +18,9 @@ const { asyncHandler, notFound, errorHandler } = require('./middleware');
  */
 const createApp = (store, { serveFrontend } = {}) => {
   const app = express();
+  // Expose the rate limiters so a test harness can reset the windows between
+  // cases; production behaviour is untouched.
+  const limiters = {};
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -72,6 +75,8 @@ const createApp = (store, { serveFrontend } = {}) => {
     legacyHeaders: false,
     message: { error: 'Too many submissions — please try again in a few minutes.' },
   });
+
+  limiters.write = writeLimiter;
 
   // When a production build exists, serve the React app from the same origin.
   // This runs before the root JSON route so "/" opens the web app.
@@ -128,7 +133,9 @@ const createApp = (store, { serveFrontend } = {}) => {
   const requireStaff = createRequireStaff({ staffAccounts, secret });
 
   const itemsRouter = createItemsRouter(store, { requireStaff });
-  app.use('/api/auth', createAuthRouter({ staffAccounts, requireStaff, secret }));
+  const authRouter = createAuthRouter({ staffAccounts, requireStaff, secret, store });
+  Object.assign(limiters, authRouter.limiters);
+  app.use('/api/auth', authRouter);
   app.use('/api/items', (req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       return writeLimiter(req, res, next);
@@ -143,6 +150,7 @@ const createApp = (store, { serveFrontend } = {}) => {
   app.use('/uploads', express.static(config.uploadDir, { maxAge: '7d', index: false }));
 
   app.use('/api', notFound);
+  app.limiters = limiters;
   app.use(notFound);
   app.use(errorHandler);
 

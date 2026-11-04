@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
 const { Item } = require('../models/Item');
 const { Claim } = require('../models/Claim');
-const { serializeItem, serializeClaim, serializeStaffClaim } = require('./serialize');
+const { AuditEntry } = require('../models/AuditEntry');
+const { serializeItem, serializeClaim, serializeStaffClaim, serializeAuditEntry } = require('./serialize');
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -10,6 +11,9 @@ const toQuery = (filter) => {
   if (filter.category) conditions.push({ category: filter.category });
   if (filter.status) conditions.push({ status: filter.status });
   if (filter.agency) conditions.push({ agency: filter.agency });
+  if (filter.depot) conditions.push({ depot: filter.depot });
+  // Depot scoping for staff: own depot, plus legacy rows that predate scoping.
+  if (filter.depotScope) conditions.push({ $or: [{ depot: filter.depotScope }, { depot: '' }, { depot: { $exists: false } }] });
   if (filter.plateNumber) conditions.push({ plateNumber: filter.plateNumber });
   if (filter.route) {
     conditions.push({ route: { $regex: escapeRegex(filter.route), $options: 'i' } });
@@ -150,6 +154,46 @@ const createMongoStore = () => ({
   async getPrivateItem(id) {
     const doc = await Item.findById(id).select('+identifyingDetails').lean();
     return doc ? { identifyingDetails: doc.identifyingDetails } : null;
+  },
+
+  // --------------------------------------------------------------- audit trail
+  /**
+   * Append an audit entry. Deliberately swallows errors: losing a log line is
+   * bad, but it must never turn a successful update into a failed request.
+   */
+  async recordAudit(entry) {
+    try {
+      const doc = await AuditEntry.create(entry);
+      return serializeAuditEntry(doc);
+    } catch (err) {
+      console.error('[audit] could not record entry:', err.message);
+      return null;
+    }
+  },
+
+  async listAudit({ filter = {}, page = 1, limit = 50 } = {}) {
+    const query = {};
+    if (filter.entity) query.entity = filter.entity;
+    if (filter.entityId) query.entityId = filter.entityId;
+    // An item's history also covers claim decisions made against it.
+    if (filter.relatedItemId) {
+      const id = filter.relatedItemId;
+      query.$or = [{ entityId: id }, { 'details.itemId': id }];
+    }
+    if (filter.action) query.action = filter.action;
+    if (filter.actorId) query.actorId = filter.actorId;
+    if (filter.depotScope) {
+      query.$or = [{ actorDepot: filter.depotScope }, { actorDepot: '' }, { actorDepot: { $exists: false } }];
+    }
+    const [docs, total] = await Promise.all([
+      AuditEntry.find(query)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      AuditEntry.countDocuments(query),
+    ]);
+    return { entries: docs.map(serializeAuditEntry), total };
   },
 
   async findClaimByReference(reference) {

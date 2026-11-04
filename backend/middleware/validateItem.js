@@ -16,6 +16,7 @@ const FIELD_LIMITS = {
   foundOnBoard: 60,
   reportedBy: 80,
   storageOffice: 120,
+  depot: 80,
 };
 
 const REQUIRED_FIELDS = ['itemName', 'description', 'category', 'plateNumber', 'foundAt'];
@@ -55,6 +56,7 @@ const validateItemPayload = (body = {}, { partial = false, now = new Date() } = 
   checkText('foundOnBoard');
   checkText('reportedBy');
   checkText('storageOffice');
+  checkText('depot');
 
   if (data.plateNumber && !PLATE_RE.test(data.plateNumber)) {
     errors.plateNumber = 'Enter a valid plate number, e.g. AA-3-12345';

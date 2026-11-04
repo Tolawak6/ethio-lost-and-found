@@ -36,7 +36,18 @@ const serializeStaff = (doc) => {
   return { _id: String(_id), ...rest };
 };
 
+/**
+ * Audit entry as the department sees it. The trail is staff-only, so the whole
+ * row is safe to return — there is no private field to strip.
+ */
+const serializeAuditEntry = (doc) => {
+  const plain = toPlain(doc);
+  const { __v, _id, ...rest } = plain;
+  return { _id: String(_id), ...rest };
+};
+
 module.exports = {
+  serializeAuditEntry,
   serializeItem,
   serializeClaim,
   serializeStaffClaim,

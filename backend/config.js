@@ -16,6 +16,8 @@ const path = require('path');
 
 require('dotenv').config();
 
+const { resolveSessionSecret } = require('./auth/secret');
+
 const env = process.env.NODE_ENV || 'development';
 const isProduction = env === 'production';
 const isTest = env === 'test';
@@ -39,9 +41,13 @@ const config = {
     ? path.resolve(process.env.UPLOAD_DIR)
     : path.join(__dirname, 'uploads'),
   corsOrigin: parseOrigins(process.env.CORS_ORIGIN),
-  // Secret used to sign department session tokens. Falls back to a random
-  // per-boot value in development (tokens then die with the process).
-  sessionSecret: process.env.SESSION_SECRET || '',
+  // Secret used to sign department session tokens. In development it is
+  // persisted to backend/.session-secret so restarts keep sessions alive.
+  sessionSecret: resolveSessionSecret({
+    fromEnv: process.env.SESSION_SECRET,
+    isProduction,
+    quiet: isTest,
+  }),
   sessionHours: Number(process.env.SESSION_HOURS) || 12,
   // First department account, created on boot when no staff exist.
   bootstrapStaff: {
@@ -65,13 +71,6 @@ const config = {
     ? !['false', '0', 'no'].includes(process.env.SEED_DEMO_DATA.toLowerCase())
     : !isProduction,
 };
-
-if (!config.sessionSecret) {
-  config.sessionSecret = require('crypto').randomBytes(32).toString('hex');
-  if (!isTest) {
-    console.warn('[config] SESSION_SECRET is not set — using a random secret (sessions end on restart).');
-  }
-}
 
 if (!isProduction && !config.bootstrapStaff.email) {
   // Keeps `npm run dev` usable out of the box.

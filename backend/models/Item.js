@@ -113,6 +113,17 @@ const ItemSchema = new mongoose.Schema(
       maxlength: [120, 'Storage office must be 120 characters or fewer'],
       default: 'Lost Property Office, Merkato',
     },
+    /**
+     * Depot that logged the item. Staff accounts only see their own depot;
+     * managers see everything. Blank means "not depot-scoped" (legacy rows).
+     */
+    depot: {
+      type: String,
+      trim: true,
+      maxlength: [80, 'Depot must be 80 characters or fewer'],
+      default: '',
+      index: true,
+    },
     storageDeadline: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
   },

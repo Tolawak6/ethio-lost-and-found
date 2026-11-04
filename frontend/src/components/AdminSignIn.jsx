@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-function AdminSignIn({ onSignIn, submitting, error }) {
+function AdminSignIn({ onSignIn, submitting, error, notice }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -20,6 +20,8 @@ function AdminSignIn({ onSignIn, submitting, error }) {
             <p className="auth__subtitle">Ethio Lost &amp; Found · staff only</p>
           </div>
         </div>
+
+        {notice && <p className="auth__notice">{notice}</p>}
 
         <form className="form" onSubmit={submit} noValidate>
           <label className="field">

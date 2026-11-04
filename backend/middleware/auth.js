@@ -23,8 +23,12 @@ const createRequireStaff = ({ staffAccounts, secret }) => async (req, res, next)
   }
 
   const account = await staffAccounts.findById(payload.sub);
-  if (!account || !account.active) {
-    return res.status(401).json({ error: 'This account is no longer active' });
+  if (!account) {
+    // The token is valid but the account is gone (e.g. the database was reset).
+    return res.status(401).json({ error: 'Your account could not be found — please sign in again', code: 'account_missing' });
+  }
+  if (!account.active) {
+    return res.status(401).json({ error: 'This account has been disabled', code: 'account_disabled' });
   }
 
   // eslint-disable-next-line no-param-reassign

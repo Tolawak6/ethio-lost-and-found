@@ -757,3 +757,70 @@ select, input[type='text'], input[type='email'], input[type='date'], input[type=
   .auth__card { padding: 26px 20px 22px; }
   .modal__panel .admin__section { padding: 20px 16px; }
 }
+
+/* Checking-session state and sign-in notices */
+.auth__checking {
+  display: grid; gap: 12px; justify-items: center; text-align: center;
+  color: rgba(255, 255, 255, 0.9); font-size: 0.95rem;
+}
+.auth__checking-hint { font-size: 0.8rem; color: rgba(255, 255, 255, 0.65); }
+.spinner {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--gold-500);
+  animation: spin 700ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.auth__notice {
+  background: var(--gold-100); color: #6d4d00;
+  border-radius: 10px; padding: 10px 12px;
+  font-size: 0.85rem; line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ audit */
+.audit {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 2px;
+}
+.audit__row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.audit__row:last-child { border-bottom: 0; }
+
+/* A dot marker reads as a timeline without needing a vertical rail. */
+.audit__dot {
+  width: 9px; height: 9px; margin-top: 6px;
+  border-radius: 50%;
+  background: var(--ink-500);
+  justify-self: center;
+}
+.audit__dot--in { background: var(--green-600); }
+.audit__dot--done { background: var(--gold-500); }
+.audit__dot--danger { background: var(--red-600); }
+.audit__dot--neutral { background: var(--ink-500); }
+
+.audit__body { display: grid; gap: 2px; min-width: 0; }
+.audit__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: 0.94rem; }
+.audit__label {
+  color: var(--ink-500);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+.audit__meta { margin: 0; color: var(--ink-500); font-size: 0.82rem; }
+.audit__detail {
+  margin: 2px 0 0;
+  font-size: 0.84rem;
+  color: var(--ink-700);
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  justify-self: start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.audit__subtitle { margin: -12px 0 18px; font-size: 0.85rem; }

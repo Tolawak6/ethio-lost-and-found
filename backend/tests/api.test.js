@@ -32,6 +32,7 @@ const PNG = Buffer.from(
 let store;
 let staffAccounts;
 let staffToken = '';
+let limiters = {};
 let server;
 let baseUrl;
 
@@ -98,6 +99,10 @@ before(async () => {
 
   // Pin API-only mode so tests never depend on a local frontend build.
   const app = createApp(store, { serveFrontend: false });
+  // Rate-limit windows are per-process, so clear them between tests: a suite
+  // of 100+ writes would otherwise trip the production throttle.
+  app.limiters = { ...app.limiters };
+  limiters = app.limiters;
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -116,6 +121,22 @@ after(async () => {
 
 beforeEach(async () => {
   store.reset();
+  Object.values(limiters || {}).forEach((limiter) => limiter.resetKey?.('::1') ?? limiter.resetKey?.('::ffff:127.0.0.1'));
+  Object.values(limiters || {}).forEach((limiter) => limiter.resetKey?.('127.0.0.1'));
+  // Staff accounts are part of the fixture too: resetting them keeps every
+  // test independent and avoids duplicate depot accounts leaking across tests.
+  await staffAccounts.clear();
+  await staffAccounts.create({
+    email: STAFF_EMAIL,
+    name: 'Test Staff',
+    passwordHash: await hashPassword(STAFF_PASSWORD),
+    depot: 'Merkato',
+    role: 'manager',
+  });
+  const login = await request('POST', '/api/auth/login', {
+    body: { email: STAFF_EMAIL, password: STAFF_PASSWORD },
+  });
+  staffToken = login.body.token;
 });
 
 // -------------------------------------------------------------- public basics
@@ -506,4 +527,304 @@ test('serves the built frontend when it is available', async (t) => {
   } finally {
     await new Promise((resolve) => ownServer.close(resolve));
   }
+});
+
+// ------------------------------------------------------------- depot scoping
+
+test('staff only see and change items from their own depot', async () => {
+  // A Kaliti account alongside the Merkato manager.
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiLogin = await request('POST', '/api/auth/login', {
+    body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+  });
+  const kalitiToken = kalitiLogin.body.token;
+
+  // The manager (Merkato) logs an item.
+  const merkatoItem = await request('POST', '/api/items', { body: validItem(), staff: true });
+  assert.equal(merkatoItem.body.depot, 'Merkato');
+
+  // The Kaliti account logs its own.
+  const kalitiItem = await request('POST', '/api/items', {
+    body: { ...validItem(), itemName: 'Kaliti phone', plateNumber: 'AA-2-99999' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(kalitiItem.status, 201);
+  assert.equal(kalitiItem.body.depot, 'Kaliti');
+
+  // Kaliti's register only contains Kaliti items.
+  const kalitiList = await request('GET', '/api/staff/items', {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(kalitiList.body.items.length, 1);
+  assert.equal(kalitiList.body.items[0].itemName, 'Kaliti phone');
+
+  // The manager sees both.
+  const managerList = await request('GET', '/api/staff/items', { staff: true });
+  assert.equal(managerList.body.items.length, 2);
+
+  // Kaliti cannot edit or delete a Merkato item…
+  const forbidden = await request('PATCH', `/api/items/${merkatoItem.body._id}`, {
+    body: { status: 'Returned' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(forbidden.status, 403);
+
+  const forbiddenDelete = await request('DELETE', `/api/items/${merkatoItem.body._id}`, {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(forbiddenDelete.status, 403);
+
+  // …or read its claims…
+  const forbiddenClaims = await request('GET', `/api/staff/items/${merkatoItem.body._id}/claims`, {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(forbiddenClaims.status, 403);
+
+  // …but can change its own.
+  const allowed = await request('PATCH', `/api/items/${kalitiItem.body._id}`, {
+    body: { status: 'Returned' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(allowed.status, 200);
+});
+
+test('a depot account cannot review another depot claim', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+
+  const item = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const claim = await request('POST', `/api/items/${item.body._id}/claims`, { body: validClaim() });
+
+  const res = await request('PATCH', `/api/staff/claims/${claim.body.claim._id}`, {
+    body: { status: 'Approved' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(res.status, 403);
+
+  // The owning depot manager can still review it.
+  const allowed = await request('PATCH', `/api/staff/claims/${claim.body.claim._id}`, {
+    body: { status: 'Approved' },
+    staff: true,
+  });
+  assert.equal(allowed.status, 200);
+});
+
+test('the overview is scoped for depot accounts', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+
+  await request('POST', '/api/items', { body: validItem(), staff: true });
+  await request('POST', '/api/items', {
+    body: { ...validItem(), itemName: 'Kaliti item', plateNumber: 'AA-2-99999' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+
+  const managerView = await request('GET', '/api/staff/overview', { staff: true });
+  assert.equal(managerView.body.total, 2);
+
+  const kalitiView = await request('GET', '/api/staff/overview', {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(kalitiView.body.total, 1);
+  assert.equal(kalitiView.body.depot, 'Kaliti');
+});
+
+test('items logged before depot scoping stay visible to every depot', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+
+  // A legacy row that predates depot scoping: it has no depot at all.
+  const legacy = await store.create({ ...validItem(), depot: '' });
+
+  const list = await request('GET', '/api/staff/items', {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(list.body.items.length, 1);
+  assert.equal(list.body.items[0]._id, String(legacy._id));
+
+  // It can still be edited by the other depot — nothing is locked away.
+  const patched = await request('PATCH', `/api/items/${legacy._id}`, {
+    body: { status: 'Returned' },
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(patched.status, 200);
+});
+
+// --------------------------------------------------------------- audit trail
+
+test('the audit trail records who logged an item', async () => {
+  const created = await request('POST', '/api/items', { body: validItem(), staff: true });
+  assert.equal(created.status, 201);
+
+  const trail = await request('GET', `/api/staff/items/${created.body._id}/audit`, { staff: true });
+  assert.equal(trail.status, 200);
+  assert.equal(trail.body.total, 1);
+
+  const [entry] = trail.body.entries;
+  assert.equal(entry.action, 'item.created');
+  assert.equal(entry.entity, 'item');
+  assert.equal(entry.entityId, created.body._id);
+  assert.equal(entry.entityLabel, 'Black leather wallet');
+  // A snapshot of the actor, so the trail survives a renamed account.
+  assert.equal(entry.actorName, 'Test Staff');
+  assert.equal(entry.actorEmail, STAFF_EMAIL);
+  assert.equal(entry.actorDepot, 'Merkato');
+  assert.ok(entry.createdAt);
+});
+
+test('updates record what changed and flag a return', async () => {
+  const created = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const id = created.body._id;
+
+  await request('PATCH', `/api/items/${id}`, { body: { route: 'Merkato – Kaliti' }, staff: true });
+  await request('PATCH', `/api/items/${id}`, { body: { status: 'Returned' }, staff: true });
+
+  const trail = await request('GET', `/api/staff/items/${id}/audit`, { staff: true });
+  // Newest first.
+  const [returned, edited, created_] = trail.body.entries;
+  assert.equal(returned.action, 'item.returned');
+  assert.equal(returned.details.to, 'Returned');
+  assert.equal(edited.action, 'item.updated');
+  assert.deepEqual(edited.details.changed, ['route']);
+  assert.equal(edited.details.route.to, 'Merkato – Kaliti');
+  assert.equal(created_.action, 'item.created');
+});
+
+test('claim decisions and sign-ins land in the trail', async () => {
+  const created = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const claim = await request('POST', `/api/items/${created.body._id}/claims`, { body: validClaim() });
+  assert.equal(claim.status, 201);
+
+  const reviewed = await request('PATCH', `/api/staff/claims/${claim.body.claim._id}`, {
+    body: { status: 'Approved', reviewNote: 'ID matches.' },
+    staff: true,
+  });
+  assert.equal(reviewed.status, 200);
+
+  const trail = await request('GET', '/api/staff/audit', { staff: true });
+  const actions = trail.body.entries.map((entry) => entry.action);
+  assert.ok(actions.includes('claim.reviewed'), `expected claim.reviewed in ${actions}`);
+  assert.ok(actions.includes('session.signed_in'), `expected session.signed_in in ${actions}`);
+
+  const reviewedEntry = trail.body.entries.find((entry) => entry.action === 'claim.reviewed');
+  assert.equal(reviewedEntry.entityLabel, claim.body.claim.reference);
+  assert.equal(reviewedEntry.details.status, 'Approved');
+  assert.equal(reviewedEntry.details.itemId, created.body._id);
+});
+
+test('the trail excludes hidden item fields', async () => {
+  const form = new FormData();
+  Object.entries(validItem()).forEach(([key, value]) => form.append(key, value));
+  form.append('identifyingDetails', 'He kept a spare key under the insole.');
+  const created = await request('POST', '/api/items', { body: form, staff: true });
+  assert.equal(created.status, 201);
+
+  const trail = await request('GET', '/api/staff/items/' + created.body._id + '/audit', { staff: true });
+  const serialised = JSON.stringify(trail.body);
+  assert.ok(!serialised.includes('spare key'), 'the private note must never reach the audit log');
+});
+
+test('a depot account only sees its own depot activity', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+  const kalitiAuth = { authorization: `Bearer ${kalitiToken}` };
+
+  // The manager's activity belongs to Merkato.
+  await request('POST', '/api/items', { body: validItem(), staff: true });
+
+  const kalitiView = await request('GET', '/api/staff/audit', { headers: kalitiAuth });
+  assert.equal(kalitiView.status, 200);
+  assert.equal(
+    kalitiView.body.entries.filter((entry) => entry.actorDepot === 'Merkato').length,
+    0,
+    'a Kaliti account must not read Merkato activity'
+  );
+
+  // The manager sees everything, including Kaliti's own sign-in.
+  const managerView = await request('GET', '/api/staff/audit', { staff: true });
+  assert.ok(managerView.body.entries.some((entry) => entry.actorDepot === 'Kaliti'));
+});
+
+test('one depot cannot request another depot item history', async () => {
+  await staffAccounts.create({
+    email: 'kaliti@depot.et',
+    name: 'Kaliti Staff',
+    passwordHash: await hashPassword('kaliti-password'),
+    depot: 'Kaliti',
+    role: 'staff',
+  });
+  const kalitiToken = (
+    await request('POST', '/api/auth/login', {
+      body: { email: 'kaliti@depot.et', password: 'kaliti-password' },
+    })
+  ).body.token;
+
+  const merkatoItem = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const res = await request('GET', `/api/staff/items/${merkatoItem.body._id}/audit`, {
+    headers: { authorization: `Bearer ${kalitiToken}` },
+  });
+  assert.equal(res.status, 403);
+});
+
+test('an item history includes claim decisions made against it', async () => {
+  const created = await request('POST', '/api/items', { body: validItem(), staff: true });
+  const claim = await request('POST', `/api/items/${created.body._id}/claims`, { body: validClaim() });
+
+  await request('PATCH', `/api/staff/claims/${claim.body.claim._id}`, {
+    body: { status: 'Collected' },
+    staff: true,
+  });
+
+  const trail = await request('GET', `/api/staff/items/${created.body._id}/audit`, { staff: true });
+  const actions = trail.body.entries.map((entry) => entry.action);
+  // Newest first: the hand-over, then the claim review that followed the create.
+  assert.equal(actions[0], 'claim.collected');
+  assert.ok(actions.includes('item.created'), `expected item.created in ${actions}`);
+  assert.equal(trail.body.entries[0].details.itemId, created.body._id);
 });

@@ -63,18 +63,22 @@ const createMongoStaffAccounts = () => {
 
 /* ------------------------------ In memory ------------------------------- */
 
-const newStaffId = () => {
-  try {
-    const mongoose = require('mongoose');
-    return new mongoose.Types.ObjectId().toString();
-  } catch {
-    return require('crypto').randomBytes(12).toString('hex');
-  }
-};
+const crypto = require('crypto');
+
+/**
+ * Deterministic id derived from the email.
+ *
+ * The in-memory store is recreated on every boot, so random ids would make
+ * every existing session token point at an account that no longer exists —
+ * which the UI reports as "your session ended". Deriving the id from the email
+ * keeps demo sessions valid across restarts (with a persisted SESSION_SECRET).
+ */
+const stableStaffId = (email) =>
+  crypto.createHash('sha256').update(String(email).toLowerCase().trim()).digest('hex').slice(0, 24);
 
 const createMemoryStaffAccounts = (seed = []) => {
   const rows = seed.map((account) => ({
-    _id: newStaffId(),
+    _id: stableStaffId(account.email),
     depot: '',
     role: 'staff',
     active: true,
@@ -94,7 +98,7 @@ const createMemoryStaffAccounts = (seed = []) => {
 
     async create({ email, name, passwordHash, depot = '', role = 'staff' }) {
       const row = {
-        _id: newStaffId(),
+        _id: stableStaffId(email),
         email: String(email).toLowerCase().trim(),
         name,
         passwordHash,

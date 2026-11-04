@@ -36,6 +36,9 @@ Bus supervisor            Lost property department              Passenger
 - Review the claims passengers file: approve, reject or mark collected
 - Closing a claim as *Collected* automatically marks the item *Returned*
 - Managers create a separate account per depot and can disable accounts
+- **Each depot sees only its own items** — plus rows logged before depots existed
+- **Activity log** — who signed in, logged, edited, reviewed or handed back each
+  item, newest first; every item row has its own **History** button
 
 There is **no link to `/admin` anywhere on the public site** — staff reach it by
 typing the URL. Access is still enforced by the API on every request, so hiding
@@ -112,7 +115,36 @@ traced back to a depot.
    stop working immediately.
 
 Sessions are signed HMAC tokens (12 h by default) held in an `httpOnly` cookie,
-with the token also usable as a bearer header for scripts.
+with the token also usable as a bearer header for scripts. In development the
+signing secret is generated once and kept in `backend/.session-secret`
+(gitignored), so restarting the server — or saving a file under `node --watch` —
+does **not** sign you out. In production set `SESSION_SECRET` explicitly.
+
+### Depots and the audit trail
+
+Every item records the depot that logged it, and a non-manager account only sees
+and edits its own depot's items. Items with no depot (logged before scoping
+existed) stay visible to everyone, so nothing is lost when the rule is rolled
+out. Managers see every depot.
+
+The workspace records an append-only trail for:
+
+| Action | Recorded as |
+| --- | --- |
+| Signing in | `session.signed_in` |
+| Publishing an item | `item.created` |
+| Editing an item | `item.updated` (with a field-by-field before → after) |
+| Marking an item returned | `item.returned` |
+| Deleting an item | `item.deleted` |
+| Approving / rejecting / handing over a claim | `claim.reviewed` / `claim.collected` |
+| Creating, disabling or enabling an account | `account.created` / `account.disabled` / `account.enabled` |
+| Changing a password | `account.password_changed` |
+
+Each row keeps a snapshot of the account name, email and depot at the time, so
+the trail stays readable after an account is renamed or removed. A depot account
+only ever reads its own depot's entries. The same log is available per item, so
+one item's whole story — including the claim decisions made against it — reads as
+a single list.
 
 ---
 
@@ -182,6 +214,8 @@ Send `Authorization: Bearer <token>`, or rely on the `staff_session` cookie.
 | `GET` | `/api/staff/items` | Register including private details + claim counts |
 | `GET` | `/api/staff/items/:id/claims` | Claims filed for one item |
 | `PATCH` | `/api/staff/claims/:id` | Review a claim (`Approved`/`Rejected`/`Collected`) |
+| `GET` | `/api/staff/audit` | Department activity log, newest first (depot-scoped) |
+| `GET` | `/api/staff/items/:id/audit` | One item's history, including claim decisions |
 | `GET` | `/api/staff/accounts` | List accounts — **managers only** |
 | `POST` | `/api/staff/accounts` | Create an account — **managers only** |
 | `PATCH` | `/api/staff/accounts/:id` | Enable/disable an account — **managers only** |
@@ -191,6 +225,11 @@ Send `Authorization: Bearer <token>`, or rely on the `staff_session` cookie.
 
 A claim moves the item to `Claim Pending`. Marking it `Collected` marks the item
 `Returned`; rejecting the last pending claim puts it back `In Storage`.
+
+A non-manager account is scoped to its own depot: the register, the overview
+counters, the activity log and the item history all hide other depots' rows, and
+editing another depot's item returns `403 This item belongs to another depot`.
+Items logged before depot scoping existed (no `depot`) stay visible to everyone.
 
 **Errors** are always JSON:
 
@@ -215,7 +254,7 @@ Copy `backend/.env.example` → `backend/.env`.
 | `MONGO_URI` | *(empty)* | MongoDB connection string; empty ⇒ in-memory store |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | *(empty)* | First manager account, created when no staff exist |
 | `ADMIN_NAME` / `ADMIN_DEPOT` | `Department staff` / *(empty)* | Details for that account |
-| `SESSION_SECRET` | random per boot | Signing key for session tokens — **set in production** |
+| `SESSION_SECRET` | dev secret file | Signing key for session tokens — **set in production** |
 | `SESSION_HOURS` | `12` | How long a sign-in lasts |
 | `RETENTION_DAYS` | `90` | How long items are held before disposal |
 | `SEED_DEMO_DATA` | on in dev | Demo records for an empty database |
@@ -223,9 +262,10 @@ Copy `backend/.env.example` → `backend/.env`.
 | `UPLOAD_DIR` | `backend/uploads` | Local image directory |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
 
-Session tokens are signed with `SESSION_SECRET`. Without it the server
-generates a random secret per boot, which is fine locally but signs everyone out
-on every restart.
+Session tokens are signed with `SESSION_SECRET`. If it is not set, development
+keeps a generated secret in `backend/.session-secret` so restarts no longer sign
+everyone out; production warns and falls back to a per-boot secret, which is why
+setting `SESSION_SECRET` there matters.
 
 ---
 
@@ -238,12 +278,15 @@ backend/
   config.js               Env parsing + defaults
   models/Item.js          Bus item schema, categories, agencies, lifecycle
   models/Claim.js         Passenger claims + reference codes
+  models/AuditEntry.js    Append-only trail of department actions
+  audit.js                Helpers for writing that trail
   routes/items.js         Public register, claims, department write routes
   routes/staff.js         Department workspace + account management
   routes/auth.js          Sign-in, sign-out, session, password change
   auth/passwords.js       scrypt hashing and constant-time verification
   auth/tokens.js          Signed session tokens (HMAC-SHA256)
   auth/bootstrap.js       Creates the first manager account
+  auth/secret.js          Session secret (env, or a persisted dev secret)
   models/Staff.js         Department accounts (login happens at /admin)
   middleware/auth.js      Session check (token or cookie)
   scripts/createStaff.js  CLI: npm run create-staff
@@ -256,10 +299,11 @@ frontend/
   src/App.jsx             Passenger board: hero, search, results, modals
   src/AdminPage.jsx       Hidden /admin route: session gate + workspace
   src/components/         ItemCard, ItemModal, ClaimForm, TrackClaim,
-                          DepartmentWorkspace, AccountsPanel, AdminSignIn,
-                          ItemForm, Filters, StatsBar
+                          DepartmentWorkspace, AuditTrail, AccountsPanel,
+                          AdminSignIn, ItemForm, Filters, StatsBar
   src/api.js              Fetch client + session storage
   test/render.test.js     Server-render tests (no browser needed)
+  test/admin.test.js      Browser-level /admin and audit tests (jsdom)
 ```
 
 The `store/` layer is why the app runs without MongoDB: `mongoStore` and
@@ -272,15 +316,16 @@ claim lifecycle), so routes never care which is active.
 
 ```bash
 npm test              # both apps
-npm run test:api      # 105 backend tests
-npm run test:web      # 22 frontend render tests
+npm run test:api      # 116 backend tests
+npm run test:web      # 34 frontend tests (SSR + jsdom)
 ```
 
 - `backend/tests/unit.test.js` — validation, plate/phone rules, filters, uploads, memory store
 - `backend/tests/auth.test.js` — hashing, tokens, sign-in, sessions, account management
-- `backend/tests/api.test.js` — full HTTP flow: auth, publishing, claiming, review, uploads, rate limiting
+- `backend/tests/api.test.js` — full HTTP flow: auth, publishing, claiming, review, uploads, rate limiting, depot scoping and the audit trail
 - `backend/tests/items.test.js` — the same flows against real MongoDB via `mongodb-memory-server` (auto-skips offline)
 - `frontend/test/render.test.js` — renders every component and the app shell
+- `frontend/test/admin.test.js` — drives the real `/admin` UI in jsdom: session handling, the register, depot labels and the activity log
 
 The MongoDB suite downloads a database binary on first run. Where that is not
 possible it skips itself, so `npm test` still passes; in CI it runs in full.
@@ -293,8 +338,8 @@ push and pull request.
 ## Roadmap
 
 - [ ] SMS notification to the claimant when a claim is approved
-- [x] Per-depot accounts with an audit trail of who changed what
-- [ ] Manager-only audit log of register changes
+- [x] Per-depot accounts and depot scoping
+- [x] Audit log of who signed in, changed or returned each item
 - [ ] Automatic match alerts when a newly logged item fits an earlier enquiry
 - [ ] Amharic and Afaan Oromoo translations
 - [ ] Printable claim forms and a daily handover sheet for the office

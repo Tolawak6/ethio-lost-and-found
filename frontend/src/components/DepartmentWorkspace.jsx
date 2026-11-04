@@ -3,13 +3,15 @@ import { api } from '../api';
 import { useToast } from '../context/ToastContext';
 import ItemForm from './ItemForm';
 import AccountsPanel from './AccountsPanel';
+import AuditTrail from './AuditTrail';
 import { formatDate, formatDateTime, statusMeta } from '../utils';
 
 /**
  * Signed-in department workspace at /admin.
- * Tabs: the register (publish/edit/return items), claims, and accounts.
+ * Tabs: the register (publish/edit/return items), claims, accounts, and the
+ * audit trail of who did what.
  */
-function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPublicChanged }) {
+function DepartmentWorkspace({ account, categories, agencies, onSignOut, onSessionError, onPublicChanged }) {
   const toast = useToast();
   const [tab, setTab] = useState('register');
   const [items, setItems] = useState([]);
@@ -18,6 +20,7 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [openClaimsFor, setOpenClaimsFor] = useState(null);
+  const [historyFor, setHistoryFor] = useState(null);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -25,12 +28,14 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
       const payload = await api.staffItems({ limit: 50 });
       setItems(payload.items);
     } catch (err) {
-      if (err.status === 401) onSignOut(true);
+      // Only a genuine auth failure ends the session; anything else is a
+      // retryable problem and must not sign the user out.
+      if (api.isSessionError(err)) onSessionError(err);
       else toast.error(err.message || 'Could not load the register');
     } finally {
       setLoading(false);
     }
-  }, [onSignOut, toast]);
+  }, [onSessionError, toast]);
 
   useEffect(() => {
     loadItems();
@@ -108,7 +113,7 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
           <a className="link-button" href="/" target="_blank" rel="noreferrer">
             View public register ↗
           </a>
-          <button type="button" className="button button--ghost button--sm" onClick={() => onSignOut(false)}>
+          <button type="button" className="button button--ghost button--sm" onClick={() => onSignOut()}>
             Sign out
           </button>
         </div>
@@ -119,6 +124,7 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
           { id: 'register', label: 'Register', badge: items.length },
           { id: 'claims', label: 'Claims', badge: pendingTotal },
           { id: 'accounts', label: 'Accounts' },
+          { id: 'audit', label: 'Activity' },
         ].map((entry) => (
           <button
             key={entry.id}
@@ -170,6 +176,7 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
                         )}
                       </div>
                       <p className="staff__row-meta">
+                        {item.depot ? `${item.depot} depot · ` : ''}
                         {item.route || item.agency} · found {formatDate(item.foundAt)} ·{' '}
                         {item.storageOffice || 'no office set'}
                       </p>
@@ -186,6 +193,13 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
                         onClick={() => setOpenClaimsFor(item)}
                       >
                         Claims{item.pendingClaims > 0 ? ` (${item.pendingClaims})` : ''}
+                      </button>
+                      <button
+                        type="button"
+                        className="button button--ghost button--sm"
+                        onClick={() => setHistoryFor(item)}
+                      >
+                        History
                       </button>
                       <button type="button" className="button button--ghost button--sm" onClick={() => setEditing(item)}>
                         Edit
@@ -251,7 +265,8 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
           </section>
         )}
 
-        {tab === 'accounts' && <AccountsPanel account={account} onSessionLost={() => onSignOut(true)} />}
+        {tab === 'accounts' && <AccountsPanel account={account} onSessionLost={onSessionError} />}
+        {tab === 'audit' && <AuditTrail onSessionError={onSessionError} />}
       </main>
 
       {(adding || editing) && (
@@ -285,6 +300,10 @@ function DepartmentWorkspace({ account, categories, agencies, onSignOut, onPubli
             />
           </div>
         </div>
+      )}
+
+      {historyFor && (
+        <AuditTrail item={historyFor} onClose={() => setHistoryFor(null)} onSessionError={onSessionError} />
       )}
 
       {openClaimsFor && (

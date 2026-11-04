@@ -21,6 +21,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Tesfaye A.',
     status: 'In Storage',
     storageOffice: 'Lost Property Office, Merkato',
+    depot: 'Merkato',
   },
   {
     itemName: 'Silver iPhone 13',
@@ -37,6 +38,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Meseret G.',
     status: 'In Storage',
     storageOffice: 'Lost Property Office, Kaliti Depot',
+    depot: 'Kaliti',
   },
   {
     itemName: 'Student backpack with textbooks',
@@ -53,6 +55,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Dawit M.',
     status: 'In Storage',
     storageOffice: 'Lost Property Office, Merkato',
+    depot: 'Merkato',
   },
   {
     itemName: 'Bunch of keys with a red tag',
@@ -68,6 +71,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Yonas B.',
     status: 'In Storage',
     storageOffice: 'Lost Property Office, Piassa Terminal',
+    depot: 'Piassa',
   },
   {
     itemName: 'Kebele ID card holder',
@@ -84,6 +88,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Selam H.',
     status: 'Returned',
     storageOffice: 'Lost Property Office, Kaliti Depot',
+    depot: 'Kaliti',
   },
   {
     itemName: 'Blue umbrella',
@@ -99,6 +104,7 @@ const SEED_ITEMS = [
     reportedBy: 'Supervisor Abebe K.',
     status: 'In Storage',
     storageOffice: 'Lost Property Office, Meskel Square',
+    depot: 'Meskel',
   },
 ];
 

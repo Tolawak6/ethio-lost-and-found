@@ -28,7 +28,7 @@ function AccountsPanel({ account, onSessionLost }) {
       const payload = await api.staffAccounts();
       setAccounts(payload.accounts);
     } catch (err) {
-      if (err.status === 401) onSessionLost();
+      if (api.isSessionError(err)) onSessionLost(err);
       else if (err.status === 403) setAccounts([]);
       else toast.error(err.message || 'Could not load accounts');
     } finally {

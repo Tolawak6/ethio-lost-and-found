@@ -4,7 +4,7 @@
  * Implements the same interface as mongoStore.
  */
 const crypto = require('crypto');
-const { serializeItem, serializeClaim, serializeStaffClaim } = require('./serialize');
+const { serializeItem, serializeClaim, serializeStaffClaim, serializeAuditEntry } = require('./serialize');
 
 const newId = () => {
   try {
@@ -28,6 +28,9 @@ const matches = (item, filter) => {
   if (filter.category && item.category !== filter.category) return false;
   if (filter.status && item.status !== filter.status) return false;
   if (filter.agency && item.agency !== filter.agency) return false;
+  if (filter.depot && item.depot !== filter.depot) return false;
+  // Depot scoping for staff: own depot, plus legacy rows that predate scoping.
+  if (filter.depotScope && item.depot && item.depot !== filter.depotScope) return false;
   if (filter.plateNumber && item.plateNumber !== filter.plateNumber) return false;
   if (filter.route && !includes(item.route, filter.route)) return false;
   if (filter.from || filter.to) {
@@ -79,6 +82,7 @@ const createMemoryStore = (seed = []) => {
   });
 
   const claims = [];
+  const auditEntries = [];
 
   const find = (id) => rows.find((row) => row.publicFields._id === id);
   return {
@@ -254,10 +258,64 @@ const createMemoryStore = (seed = []) => {
       return claims.filter((claim) => claim.item === itemId && claim.status === 'Pending').length;
     },
 
+    // ------------------------------------------------------------- audit trail
+    /**
+     * Append an audit entry. Never throws into the request path: a failed
+     * audit write must not undo a real update, so callers get null instead.
+     */
+    async recordAudit(entry) {
+      try {
+        const row = {
+          _id: newId(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          action: entry.action,
+          entity: entry.entity,
+          entityId: entry.entityId || '',
+          entityLabel: entry.entityLabel || '',
+          actorId: entry.actorId || '',
+          actorName: entry.actorName || '',
+          actorEmail: entry.actorEmail || '',
+          actorDepot: entry.actorDepot || '',
+          details: entry.details || {},
+        };
+        auditEntries.push(row);
+        return serializeAuditEntry(row);
+      } catch {
+        return null;
+      }
+    },
+
+    async listAudit({ filter = {}, page = 1, limit = 50 } = {}) {
+      let matching = auditEntries.slice();
+      if (filter.entity) matching = matching.filter((e) => e.entity === filter.entity);
+      if (filter.entityId) matching = matching.filter((e) => e.entityId === filter.entityId);
+      // An item's history also covers claim decisions made against it.
+      if (filter.relatedItemId) {
+        matching = matching.filter(
+          (e) => e.entityId === filter.relatedItemId || e.details?.itemId === filter.relatedItemId
+        );
+      }
+      if (filter.action) matching = matching.filter((e) => e.action === filter.action);
+      if (filter.actorId) matching = matching.filter((e) => e.actorId === filter.actorId);
+      if (filter.depotScope) {
+        matching = matching.filter((e) => !e.actorDepot || e.actorDepot === filter.depotScope);
+      }
+      // Newest first, then by insertion order within the same millisecond.
+      matching.sort((a, b) => b.createdAt - a.createdAt);
+      const total = matching.length;
+      const start = (page - 1) * limit;
+      return {
+        entries: matching.slice(start, start + limit).map(serializeAuditEntry),
+        total,
+      };
+    },
+
     /** Test helper. */
     reset() {
       rows.length = 0;
       claims.length = 0;
+      auditEntries.length = 0;
     },
 
     /** Test helper: seed a staff-visible item with private fields. */

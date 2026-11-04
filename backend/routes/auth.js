@@ -5,6 +5,7 @@ const { hashPassword, verifyPassword } = require('../auth/passwords');
 const { createToken } = require('../auth/tokens');
 const { asyncHandler } = require('../middleware');
 const { validateStaffCredentials, validatePasswordChange } = require('../middleware/validateStaff');
+const { recordAudit } = require('../audit');
 
 /**
  * Department authentication routes (mounted at /api/auth).
@@ -14,7 +15,7 @@ const { validateStaffCredentials, validatePasswordChange } = require('../middlew
  *   GET  /api/auth/me       current account (used by the admin page on load)
  *   POST /api/auth/password change the signed-in account's password
  */
-const createAuthRouter = ({ staffAccounts, requireStaff, secret }) => {
+const createAuthRouter = ({ staffAccounts, requireStaff, secret, store }) => {
   const router = express.Router();
 
   // Sign-in is the only endpoint an attacker can hammer; keep it tight.
@@ -68,6 +69,13 @@ const createAuthRouter = ({ staffAccounts, requireStaff, secret }) => {
 
       await staffAccounts.touchLogin(account._id);
       const token = issueSession(res, account);
+      await recordAudit(store, {
+        action: 'session.signed_in',
+        entity: 'session',
+        entityId: account._id,
+        entityLabel: account.name,
+        staff: account,
+      });
       return res.json({ token, account: sanitise(account) });
     })
   );
@@ -97,10 +105,18 @@ const createAuthRouter = ({ staffAccounts, requireStaff, secret }) => {
       }
 
       await staffAccounts.updatePassword(req.staff._id, await hashPassword(newPassword));
+      await recordAudit(store, {
+        action: 'account.password_changed',
+        entity: 'account',
+        entityId: req.staff._id,
+        entityLabel: req.staff.name,
+        staff: req.staff,
+      });
       return res.json({ message: 'Password updated' });
     })
   );
 
+  router.limiters = { login: loginLimiter };
   return router;
 };
 

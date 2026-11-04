@@ -3,12 +3,29 @@ const { CATEGORIES, STATUSES, AGENCIES } = require('../models/Item');
 const { upload, storeImage, destroyImage } = require('../upload');
 const { validateItem, validateClaim } = require('../middleware/validateItem');
 const { asyncHandler } = require('../middleware');
+const { recordAudit, describeChanges } = require('../audit');
 const { buildFilter } = require('../store/filter');
 const config = require('../config');
 
 /** Mounts the item + claim routes on a given store implementation. */
 const createItemsRouter = (store, { requireStaff }) => {
   const router = express.Router();
+
+  /**
+   * Depot scoping for department writes: staff may only change items logged by
+   * their own depot. Managers are unrestricted.
+   */
+  const requireOwnDepot = async (req, res, next) => {
+    const { role, depot } = req.staff || {};
+    if (role === 'manager' || !depot) return next();
+
+    const item = await store.findRaw(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.depot && item.depot !== depot) {
+      return res.status(403).json({ error: 'This item belongs to another depot' });
+    }
+    return next();
+  };
 
   const requireReady = (req, res, next) => {
     if (store.isReady()) return next();
@@ -108,6 +125,8 @@ const createItemsRouter = (store, { requireStaff }) => {
       if (!store.isReady()) return res.status(503).json({ error: 'Database unavailable' });
 
       const payload = { ...req.validatedBody };
+      // Items belong to the depot that logged them.
+      if (!payload.depot && req.staff?.depot) payload.depot = req.staff.depot;
       if (req.file) {
         const { url, publicId } = await storeImage(req.file);
         payload.imageUrl = url;
@@ -115,6 +134,14 @@ const createItemsRouter = (store, { requireStaff }) => {
       }
 
       const item = await store.create(payload);
+      await recordAudit(store, {
+        action: 'item.created',
+        entity: 'item',
+        entityId: item._id,
+        entityLabel: item.itemName,
+        staff: req.staff,
+        details: { plateNumber: item.plateNumber, depot: item.depot, status: item.status },
+      });
       res.status(201).json(item);
     })
   );
@@ -132,6 +159,8 @@ const createItemsRouter = (store, { requireStaff }) => {
       changes.imagePublicId = publicId;
     }
 
+    // Read the row before the write so the trail can show what actually changed.
+    const before = await store.findRaw(id);
     const result = await store.update(id, changes);
     if (!result) return res.status(404).json({ error: 'Item not found' });
 
@@ -139,12 +168,29 @@ const createItemsRouter = (store, { requireStaff }) => {
       await destroyImage(result.previousPublicId);
     }
 
+    const diff = describeChanges(before, result.item);
+    const returned = result.item.status === 'Returned' && before?.status !== 'Returned';
+    await recordAudit(store, {
+      action: returned ? 'item.returned' : 'item.updated',
+      entity: 'item',
+      entityId: result.item._id,
+      entityLabel: result.item.itemName,
+      staff: req.staff,
+      details: {
+        changed: Object.keys(diff),
+        ...diff,
+        // Convenient top-level values for the trail UI.
+        ...(returned ? { from: before?.status || null, to: result.item.status } : {}),
+      },
+    });
+
     return res.json(result.item);
   });
 
   router.put(
     '/:id',
     requireStaff,
+    requireOwnDepot,
     upload.single('image'),
     validateItem(),
     updateHandler
@@ -152,19 +198,29 @@ const createItemsRouter = (store, { requireStaff }) => {
   router.patch(
     '/:id',
     requireStaff,
+    requireOwnDepot,
     upload.single('image'),
     validateItem({ partial: true }),
     updateHandler
   );
 
   // ------------------------------------------------------- department: delete
-  router.delete('/:id', requireStaff, requireReady, asyncHandler(async (req, res) => {
+  router.delete('/:id', requireStaff, requireOwnDepot, requireReady, asyncHandler(async (req, res) => {
     const { id } = req.params;
     if (!store.isValidId(id)) return res.status(400).json({ error: 'Invalid item id' });
 
     const removed = await store.remove(id);
     if (!removed) return res.status(404).json({ error: 'Item not found' });
     await destroyImage(removed.imagePublicId);
+    // The entry keeps the label because the row itself is gone.
+    await recordAudit(store, {
+      action: 'item.deleted',
+      entity: 'item',
+      entityId: id,
+      entityLabel: removed.item.itemName,
+      staff: req.staff,
+      details: { plateNumber: removed.item.plateNumber, status: removed.item.status },
+    });
     return res.json({ message: 'Item deleted successfully', id });
   }));
 

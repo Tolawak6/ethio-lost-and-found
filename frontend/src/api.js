@@ -10,11 +10,12 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const STAFF_TOKEN_STORAGE = 'elf.staffToken';
 
 export class ApiError extends Error {
-  constructor(message, status, fields) {
+  constructor(message, status, fields, code) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fields = fields || {};
+    this.code = code;
   }
 }
 
@@ -30,7 +31,7 @@ const parse = async (response) => {
   }
   if (!response.ok) {
     const message = payload?.error || `Request failed (${response.status})`;
-    throw new ApiError(message, response.status, payload?.fields);
+    throw new ApiError(message, response.status, payload?.fields, payload?.code);
   }
   return payload;
 };
@@ -148,22 +149,27 @@ export const api = {
     }
   },
 
-  /** Resolves the current account, or null when there is no session. */
+  /**
+   * Resolves the current account, or null when there is no valid session.
+   * A network hiccup or a 5xx must not wipe a perfectly good token — only a
+   * real 401 does that.
+   */
   getSession: async () => {
-    try {
-      const payload = await fetch('/api/auth/me', {
-        headers: staffHeaders(),
-        credentials: 'same-origin',
-      }).then(parse);
-      return payload?.account || null;
-    } catch (err) {
-      if (err.status === 401) {
-        staffSession.clear();
-        return null;
-      }
-      throw err;
+    const res = await fetch('/api/auth/me', {
+      headers: staffHeaders(),
+      credentials: 'same-origin',
+    });
+    if (res.status === 401) {
+      staffSession.clear();
+      return null;
     }
+    const payload = await parse(res);
+    return payload?.account || null;
   },
+
+  /** True when an error means "you are no longer signed in". */
+  isSessionError: (err) =>
+    err?.status === 401 || err?.code === 'account_missing' || err?.code === 'account_disabled',
 
   changePassword: (currentPassword, newPassword) =>
     fetch('/api/auth/password', {
@@ -173,6 +179,15 @@ export const api = {
     }).then(parse),
 
   staffAccounts: () => fetch('/api/staff/accounts', { headers: staffHeaders() }).then(parse),
+
+  // --- audit trail --------------------------------------------------------
+  /** Department activity, newest first. Depot accounts are scoped server-side. */
+  auditTrail: (params = {}) =>
+    fetch(`/api/staff/audit${buildQuery(params)}`, { headers: staffHeaders() }).then(parse),
+
+  /** The history of one item: who logged it, changed it, handed it back. */
+  itemAudit: (id, params = {}) =>
+    fetch(`/api/staff/items/${id}/audit${buildQuery(params)}`, { headers: staffHeaders() }).then(parse),
 
   createStaffAccount: (account) =>
     fetch('/api/staff/accounts', {

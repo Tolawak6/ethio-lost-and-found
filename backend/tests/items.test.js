@@ -94,7 +94,13 @@ before(async () => {
   }
 
   config.sessionSecret = 'integration-session-secret';
+  // createStore() picks the Mongo store from config.mongoUri, which is empty
+  // when no .env is present — so point it at the memory server first. Without
+  // this the suite talked to a real database for its asserts while every write
+  // landed in the in-memory store, and MongoDB was never actually exercised.
+  config.mongoUri = mongo.getUri();
   const store = createStore({ seed: false });
+  assert.equal(store.kind, 'mongodb', 'this suite must run against MongoDB');
   const { hashPassword } = require('../auth/passwords');
   await store.staffAccounts.create({
     email: STAFF_EMAIL,

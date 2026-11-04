@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   backend:
     name: Backend tests
@@ -25,13 +29,16 @@ jobs:
           set -o pipefail
           npm test 2>&1 | tee /tmp/test-output.txt
       - name: Summarise failures
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          # The job log needs admin rights to download, so publish the failing
-          # assertions to the run summary as well — that is readable from the
-          # PR and makes a red build diagnosable at a glance.
+          # The job log needs admin rights to download, so post the failing
+          # assertions on the PR itself — a sticky comment, updated in place on
+          # each red run, so a failure is diagnosable without the raw log.
           {
-            echo '## Backend test failures'
+            echo "**Backend tests failed** on \`${GITHUB_SHA:0:8}\`"
             echo
             echo '```'
             grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
@@ -48,7 +55,14 @@ jobs:
             grep -oE 'MongoDB test server unavailable: [^"\n]*' /tmp/test-output.txt | sort -u | head -5 || true
             echo '```'
             echo '</details>'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > /tmp/pr-comment.md
+          gh pr comment "$PR" --body-file /tmp/pr-comment.md --edit-last --create-if-none || true
+
+      - name: Summarise failures (local logs)
+        if: failure() && github.event_name != 'pull_request'
+        run: |
+          grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
+          awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -80 || true
           exit 1
 
   frontend:

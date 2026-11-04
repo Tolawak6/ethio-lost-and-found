@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Run tests
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee /tmp/test-output.txt
+      - name: Summarise failures
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # The job log needs admin rights to download, so post the failing
+          # assertions on the PR itself — a sticky comment, updated in place on
+          # each red run, so a failure is diagnosable without the raw log.
+          {
+            echo "**Backend tests failed** on \`${GITHUB_SHA:0:8}\`"
+            echo
+            echo '```'
+            grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
+            echo '```'
+            echo
+            echo '<details><summary>First failure detail</summary>'
+            echo
+            echo '```'
+            awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -80 || true
+            echo '```'
+            echo
+            echo 'Skip reasons:'
+            echo '```'
+            grep -oE 'MongoDB test server unavailable: [^"\n]*' /tmp/test-output.txt | sort -u | head -5 || true
+            echo '```'
+            echo '</details>'
+          } > /tmp/pr-comment.md
+          gh pr comment "$PR" --body-file /tmp/pr-comment.md --edit-last --create-if-none || true
+
+      - name: Summarise failures (local logs)
+        if: failure() && github.event_name != 'pull_request'
+        run: |
+          grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
+          awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -80 || true
+          exit 1
+
+  frontend:
+    name: Frontend tests & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

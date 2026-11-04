@@ -27,22 +27,28 @@ jobs:
       - name: Summarise failures
         if: failure()
         run: |
-          # Surface the failing assertions as a check annotation. The raw job
-          # log needs admin rights to download, but annotations are readable
-          # from the PR, which makes a red build diagnosable at a glance.
+          # The job log needs admin rights to download, so publish the failing
+          # assertions to the run summary as well — that is readable from the
+          # PR and makes a red build diagnosable at a glance.
           {
-            echo "Failing assertions:"
+            echo '## Backend test failures'
             echo
+            echo '```'
             grep -E '^not ok|^# (tests|pass|fail|skipped)' /tmp/test-output.txt || true
+            echo '```'
             echo
-            echo "First failure detail:"
+            echo '<details><summary>First failure detail</summary>'
             echo
-            awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -60 || true
+            echo '```'
+            awk '/^not ok/{flag=1} flag' /tmp/test-output.txt | head -80 || true
+            echo '```'
             echo
-            echo "Skip reasons:"
-            echo
-            grep -oE 'MongoDB test server unavailable: [^"]*' /tmp/test-output.txt | sort -u | head -5 || true
-          } >&2
+            echo 'Skip reasons:'
+            echo '```'
+            grep -oE 'MongoDB test server unavailable: [^"\n]*' /tmp/test-output.txt | sort -u | head -5 || true
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
   frontend:
